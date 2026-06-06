@@ -1,33 +1,97 @@
-# firstJava
+# FableOps: Synchronized Survival
 
-A [libGDX](https://libgdx.com/) project generated with [gdx-liftoff](https://github.com/libgdx/gdx-liftoff).
+## Overview
 
-This project was generated with a template including simple application launchers and an `ApplicationAdapter` extension that draws libGDX logo.
+FableOps: Synchronized Survival is a 2-player cooperative LAN-based top-down cyberpunk survival game developed using Java and libGDX.
 
-## Platforms
+The project focuses on synchronized multiplayer gameplay where two players connect through a local network, cooperate to survive enemy encounters, complete objectives, and progress through a shared game world.
 
-- `core`: Main module with the application logic shared by all platforms.
-- `lwjgl3`: Primary desktop platform using LWJGL3; was called 'desktop' in older docs.
+This project is being developed as part of the CSE 4402: Visual Programming Lab course.
 
-## Gradle
+---
 
-This project uses [Gradle](https://gradle.org/) to manage dependencies.
-The Gradle wrapper was included, so you can run Gradle tasks using `gradlew.bat` or `./gradlew` commands.
-Useful Gradle tasks and flags:
+## Features
 
-- `--continue`: when using this flag, errors will not stop the tasks from running.
-- `--daemon`: thanks to this flag, Gradle daemon will be used to run chosen tasks.
-- `--offline`: when using this flag, cached dependency archives will be used.
-- `--refresh-dependencies`: this flag forces validation of all dependencies. Useful for snapshot versions.
-- `build`: builds sources and archives of every project.
-- `cleanEclipse`: removes Eclipse project data.
-- `cleanIdea`: removes IntelliJ project data.
-- `clean`: removes `build` folders, which store compiled classes and built archives.
-- `eclipse`: generates Eclipse project data.
-- `idea`: generates IntelliJ project data.
-- `lwjgl3:jar`: builds application's runnable jar, which can be found at `lwjgl3/build/libs`.
-- `lwjgl3:run`: starts the application.
-- `test`: runs unit tests (if any).
+* 2-player cooperative gameplay
+* LAN-based multiplayer synchronization
+* Shared game world and objectives
+* Real-time player movement and interaction
+* Enemy survival encounters
+* Modular object-oriented architecture
+* Java + libGDX implementation
 
-Note that most tasks that are not specific to a single project can be run with `name:` prefix, where the `name` should be replaced with the ID of a specific project.
-For example, `core:clean` removes `build` folder only from the `core` project.
+---
+
+## Project Structure
+
+### core
+
+Contains the shared game logic:
+
+* Game screens
+* Player systems
+* World management
+* Networking models
+* Gameplay mechanics
+
+### lwjgl3
+
+Desktop launcher using LWJGL3:
+
+* Application startup
+* Desktop-specific configurations
+* Resource loading
+
+---
+
+## Technologies Used
+
+* Java
+* libGDX
+* Gradle
+* LWJGL3
+* Socket-based LAN Networking
+
+---
+
+## Running the Project
+
+Run the desktop version:
+
+```bash
+./gradlew lwjgl3:run
+```
+
+Windows:
+
+```bash
+gradlew.bat lwjgl3:run
+```
+
+Build executable JAR:
+
+```bash
+./gradlew lwjgl3:jar
+```
+
+Generated JAR:
+
+```text
+lwjgl3/build/libs/
+```
+
+---
+
+## Team
+
+FableOps Development Team
+
+Islamic University of Technology (IUT)
+
+Department of Computer Science and Engineering
+
+---
+
+## License
+
+This project is developed for academic and educational purposes.
