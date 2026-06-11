@@ -6,6 +6,7 @@ import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 
 import io.github.fableops.network.GameClient;
 import io.github.fableops.network.GameServer;
@@ -15,6 +16,7 @@ import io.github.fableops.network.WorldState;
 public class GameScreen implements Screen {
 
     private ShapeRenderer shape;
+    private SpriteBatch batch;
     private Player player1;
     private Player player2;
     private WorldMap world;
@@ -33,6 +35,7 @@ public class GameScreen implements Screen {
         this.isDebug = (server == null && client == null);
 
         shape = new ShapeRenderer();
+        batch = new SpriteBatch();
         world = new WorldMap();
 
         // P1 — always WASD
@@ -54,6 +57,10 @@ public class GameScreen implements Screen {
             Input.Keys.LEFT, Input.Keys.RIGHT,
             world
         );
+
+        player1.setTexture("walking.jpg", "running.jpg");
+        player2.setTexture("hacker_walking.png", "hacker_run.png");
+
     }
 
     @Override
@@ -125,33 +132,41 @@ public class GameScreen implements Screen {
     }
 
     private void drawWorld() {
-        int screenW = Gdx.graphics.getWidth();
-        int screenH = Gdx.graphics.getHeight();
-        int half    = (screenW - DIVIDER) / 2;
+    int screenW = Gdx.graphics.getWidth();
+    int screenH = Gdx.graphics.getHeight();
+    int half    = (screenW - DIVIDER) / 2;
 
-        Gdx.gl.glClearColor(0f, 0f, 0f, 1f);
-        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+    Gdx.gl.glClearColor(0f, 0f, 0f, 1f);
+    Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
-        // left half — P1 camera
-        Gdx.gl.glViewport(0, 0, half, screenH);
-        shape.setProjectionMatrix(player1.camera.combined);
-        shape.begin(ShapeRenderer.ShapeType.Filled);
-        world.draw(shape);
-        player1.draw(shape);
-        player2.draw(shape);
-        shape.end();
+    // left half — P1 camera
+    Gdx.gl.glViewport(0, 0, half, screenH);
+    shape.setProjectionMatrix(player1.camera.combined);
+    shape.begin(ShapeRenderer.ShapeType.Filled);
+    world.draw(shape);                         // P2 uses ShapeRenderer
+    shape.end();
 
-        // right half — P2 camera
-        Gdx.gl.glViewport(half + DIVIDER, 0, half, screenH);
-        shape.setProjectionMatrix(player2.camera.combined);
-        shape.begin(ShapeRenderer.ShapeType.Filled);
-        world.draw(shape);
-        player1.draw(shape);
-        player2.draw(shape);
-        shape.end();
+    batch.setProjectionMatrix(player1.camera.combined);
+    batch.begin();
+    player1.draw(batch);   
+    player2.draw(batch);                       // P1 uses texture
+    batch.end();
 
-        Gdx.gl.glViewport(0, 0, screenW, screenH);
-    }
+    // right half — P2 camera
+    Gdx.gl.glViewport(half + DIVIDER, 0, half, screenH);
+    shape.setProjectionMatrix(player2.camera.combined);
+    shape.begin(ShapeRenderer.ShapeType.Filled);
+    world.draw(shape);                         // P2 uses ShapeRenderer
+    shape.end();
+
+    batch.setProjectionMatrix(player2.camera.combined);
+    batch.begin();
+    player1.draw(batch);    
+    player2.draw(batch);                      // P1 uses texture
+    batch.end();
+
+    Gdx.gl.glViewport(0, 0, screenW, screenH);
+}
 
     @Override public void show() {}
     @Override public void resize(int w, int h) {}
@@ -162,6 +177,9 @@ public class GameScreen implements Screen {
     @Override
     public void dispose() {
         shape.dispose();
+        batch.dispose();
+        player1.dispose();
+        player2.dispose();
         if (server != null) server.stop();
         if (client != null) client.stop();
     }

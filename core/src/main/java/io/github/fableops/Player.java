@@ -4,14 +4,19 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 
 import io.github.fableops.network.PlayerInput;
 
 public class Player {
 
     public float x, y;
-    public static final float SIZE = 36f;
+    public static final float SIZE = 100f;
     private static final float SPEED = 220f;
+    private Texture texture;
+    private Texture runTexture;  
+private boolean isMoving = false;
 
     public Color bodyColor;
     public Color accentColor;
@@ -61,6 +66,16 @@ public class Player {
         );
     }
 
+    // Setter Method to set Sprites
+
+    public void setTexture(String idleFile, String runFile)
+    {
+        if(texture!=null) texture.dispose();
+        if(runTexture!=null) runTexture.dispose();
+        texture=new Texture(Gdx.files.internal(idleFile));
+        runTexture=new Texture(Gdx.files.internal(runFile));
+    }
+
     // applies a received PlayerInput — used by host to move P2
     public void applyInput(PlayerInput input, float delta) {
         float dx = 0, dy = 0;
@@ -68,6 +83,8 @@ public class Player {
         if (input.down)  dy -= SPEED * delta;
         if (input.left)  dx -= SPEED * delta;
         if (input.right) dx += SPEED * delta;
+
+        isMoving=(dx!=0 || dy!=0);
 
         if (!world.collides(x + dx, y, SIZE, SIZE)) x += dx;
         if (!world.collides(x, y + dy, SIZE, SIZE)) y += dy;
@@ -83,6 +100,7 @@ public class Player {
         if (Gdx.input.isKeyPressed(keyLeft))  dx -= SPEED * delta;
         if (Gdx.input.isKeyPressed(keyRight)) dx += SPEED * delta;
 
+        isMoving=(dx!=0 || dy!=0);
         if (!world.collides(x + dx, y, SIZE, SIZE)) x += dx;
         if (!world.collides(x, y + dy, SIZE, SIZE)) y += dy;
 
@@ -101,7 +119,7 @@ public class Player {
 
     public void draw(ShapeRenderer shape) {
         // body
-        shape.setColor(bodyColor);
+         shape.setColor(bodyColor);
         shape.rect(x, y, SIZE, SIZE);
 
         // visor strip
@@ -120,6 +138,25 @@ public class Player {
         // shoulder pads
         shape.setColor(accentColor.r * 0.7f, accentColor.g * 0.7f, accentColor.b * 0.7f, 1f);
         shape.rect(x,             y + SIZE - 18f, 7f, 7f);
-        shape.rect(x + SIZE - 7f, y + SIZE - 18f, 7f, 7f);
+        shape.rect(x + SIZE - 7f, y + SIZE - 18f, 7f, 7f); 
     }
+
+    public void draw(SpriteBatch batch) 
+    {
+        if(texture==null || runTexture==null) return;
+        if(isMoving)
+        {
+            batch.draw(runTexture, x, y, SIZE, SIZE);
+        }
+        else
+        {
+            batch.draw(texture, x, y, SIZE, SIZE);
+        }
+    }
+    
+
+public void dispose() {
+    texture.dispose();
+    runTexture.dispose();
+}
 }
