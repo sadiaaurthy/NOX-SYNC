@@ -58,8 +58,8 @@ public class GameScreen implements Screen {
             world
         );
 
-        player1.setTexture("walking.jpg", "running.jpg");
-        player2.setTexture("hacker_walking.png", "hacker_run.png");
+        player1.setTexture("Walking.jpg", "Running.jpg");
+        player2.setTexture("Hacker_walking.png", "Hacker_run.png");
 
     }
 
@@ -131,7 +131,7 @@ public class GameScreen implements Screen {
         player2.updateCamera();
     }
 
-    private void drawWorld() {
+  /*   private void drawWorld() {
     int screenW = Gdx.graphics.getWidth();
     int screenH = Gdx.graphics.getHeight();
     int half    = (screenW - DIVIDER) / 2;
@@ -166,6 +166,37 @@ public class GameScreen implements Screen {
     batch.end();
 
     Gdx.gl.glViewport(0, 0, screenW, screenH);
+} */
+
+    private void drawWorld() {
+    int screenW = Gdx.graphics.getWidth();
+    int screenH = Gdx.graphics.getHeight();
+    int half    = (screenW - DIVIDER) / 2;
+
+    Gdx.gl.glClearColor(0f, 0f, 0f, 1f);
+    Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+
+    // left half — P1 camera
+    Gdx.gl.glViewport(0, 0, half, screenH);
+    world.render(player1.camera);
+
+    batch.setProjectionMatrix(player1.camera.combined);
+    batch.begin();
+    player1.draw(batch);
+    player2.draw(batch);
+    batch.end();
+
+    // right half — P2 camera
+    Gdx.gl.glViewport(half + DIVIDER, 0, half, screenH);
+    world.render(player2.camera);
+
+    batch.setProjectionMatrix(player2.camera.combined);
+    batch.begin();
+    player1.draw(batch);
+    player2.draw(batch);
+    batch.end();
+
+    Gdx.gl.glViewport(0, 0, screenW, screenH);
 }
 
     @Override public void show() {}
@@ -180,6 +211,7 @@ public class GameScreen implements Screen {
         batch.dispose();
         player1.dispose();
         player2.dispose();
+        world.dispose();
         if (server != null) server.stop();
         if (client != null) client.stop();
     }
