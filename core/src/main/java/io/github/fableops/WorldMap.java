@@ -1,6 +1,9 @@
 package io.github.fableops;
 
-import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+import com.badlogic.gdx.graphics.OrthographicCamera;
+import com.badlogic.gdx.maps.tiled.TmxMapLoader;
+import com.badlogic.gdx.maps.tiled.renderers.OrthogonalTiledMapRenderer;
+import com.badlogic.gdx.maps.tiled.TiledMap;
 
 public class WorldMap {
 
@@ -8,7 +11,30 @@ public class WorldMap {
     public static final float WORLD_W = 1920f;
     public static final float WORLD_H = 1080f;
 
-    // walls: x, y, width, height
+    private TiledMap map;
+    private OrthogonalTiledMapRenderer renderer;
+
+    public WorldMap() {
+        map      = new TmxMapLoader().load("Map1.tmx");  // your file name
+        renderer = new OrthogonalTiledMapRenderer(map);
+    }
+
+     public void render(OrthographicCamera camera) {
+        renderer.setView(camera);
+        renderer.render();
+    }
+
+    public void dispose() {
+        map.dispose();
+        renderer.dispose();
+    }
+
+    public boolean collides(float x, float y, float w, float h) {
+        if (x < 0 || y < 0 || x + w > WORLD_W || y + h > WORLD_H) return true;
+        return false;
+    }
+
+ /*    // walls: x, y, width, height
     private static final float[][] WALLS = {
         {400,  200, 120,  30},
         {800,  400,  30, 160},
@@ -69,5 +95,5 @@ public class WorldMap {
             }
         }
         return false;
-    }
+    } */
 }
