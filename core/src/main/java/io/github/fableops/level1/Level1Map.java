@@ -41,6 +41,12 @@ public class Level1Map implements Collidable {
     private boolean gateP1Open = false;
     private boolean gateP2Open = false;
 
+    // Union of every traced rectangle regardless of side/gate-open state — used only
+    // while INTERNAL_WALLS_ENABLED is false, so "no internal walls between P1/P2" still
+    // keeps players inside the building's actual footprint instead of the whole
+    // rectangular world border (which includes plenty of black void the art never draws).
+    private final List<Rectangle> allTracedFloor = new ArrayList<>();
+
     public Level1Map() {
         background = new Texture(Gdx.files.internal("Level1Map.png"));
 
@@ -70,6 +76,12 @@ public class Level1Map implements Collidable {
 
         // --- Shared center reactor chamber ---
         centerChamber = imageRectToWorld(700, 2050, 1200, 1530);
+
+        allTracedFloor.addAll(floorP1);
+        allTracedFloor.addAll(floorP2);
+        allTracedFloor.add(gateP1);
+        allTracedFloor.add(gateP2);
+        allTracedFloor.add(centerChamber);
     }
 
     private void addFloorRect(List<Rectangle> list, float x1, float x2, float yTop, float yBottom) {
@@ -94,9 +106,21 @@ public class Level1Map implements Collidable {
         gateP2Open = true;
     }
 
+    // TEMPORARY, per explicit request: no per-side restriction (P1 isn't confined to
+    // floorP1, P2 isn't confined to floorP2, gates don't need to be solved) — but movement
+    // is still confined to the union of every traced rectangle, not the whole rectangular
+    // world border, so players can't wander into the black void between/around the
+    // building's wings. Flip back to true once internal walls come back for real.
+    private static final boolean INTERNAL_WALLS_ENABLED = false;
+
     @Override
     public boolean collides(float x, float y, float w, float h, int playerSide) {
         Rectangle box = new Rectangle(x, y, w, h);
+
+        if (!INTERNAL_WALLS_ENABLED) {
+            for (Rectangle r : allTracedFloor) if (r.contains(box)) return false;
+            return true;
+        }
 
         List<Rectangle> ownFloor = (playerSide == 1) ? floorP1 : floorP2;
         Rectangle ownGate = (playerSide == 1) ? gateP1 : gateP2;

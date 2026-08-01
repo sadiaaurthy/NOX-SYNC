@@ -3,22 +3,37 @@ package io.github.fableops;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
+import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.Animation;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import io.github.fableops.network.PlayerInput;
 
 public class Player {
 
+    /** Row order in the sprite sheet: row 0 = down, 1 = up, 2 = left, 3 = right. */
+    private enum Direction { DOWN, UP, LEFT, RIGHT }
+
+    private static final int SHEET_COLUMNS = 8;
+    private static final int SHEET_ROWS = 4;
+    private static final float FRAME_DURATION = 0.1f; // 8 frames * 0.1s = 0.8s per walk cycle
+    private static final int ALPHA_THRESHOLD = 20; // ignore faint anti-aliasing dust in gutters
+
     public float x, y;
     public static final float SIZE = 100f;
     private static final float SPEED = 220f;
-    private Texture texture;
-    private Texture runTexture;
-    private float idleDrawW, idleDrawH;
-    private float runDrawW, runDrawH;
-private boolean isMoving = false;
+
+    private Texture spriteSheet;
+    private Animation<TextureRegion>[] walkAnimations; // indexed by Direction.ordinal()
+    private float stateTime = 0f;
+    private Direction facing = Direction.DOWN;
+    private boolean isMoving = false;
 
     public Color bodyColor;
     public Color accentColor;
@@ -90,22 +105,90 @@ private boolean isMoving = false;
         );
     }
 
-    // Setter Method to set Sprites
+    /**
+     * Loads a 4-direction walk sheet (8 columns x 4 rows: down, up, left, right) and
+     * slices it into a looping Animation per direction. There's no separate idle pose in
+     * these sheets, so idle just holds frame 0 of whichever direction was last faced.
+     *
+     * Frame boundaries are detected from the actual transparent gutters between poses
+     * rather than assumed to be a uniform grid — these hand-placed sheets aren't
+     * perfectly evenly spaced, and slicing on a uniform grid cut a few pixels off one
+     * neighboring frame and into the next (stray pixels above/below/beside the sprite).
+     */
+    @SuppressWarnings("unchecked")
+    public void setTexture(String spriteSheetFile) {
+        if (spriteSheet != null) spriteSheet.dispose();
 
-    public void setTexture(String idleFile, String runFile)
-    {
-        if(texture!=null) texture.dispose();
-        if(runTexture!=null) runTexture.dispose();
-        texture=new Texture(Gdx.files.internal(idleFile));
-        runTexture=new Texture(Gdx.files.internal(runFile));
+        Pixmap pixmap = new Pixmap(Gdx.files.internal(spriteSheetFile));
+        int[] colBoundaries = detectBoundaries(pixmap, true, SHEET_COLUMNS);
+        int[] rowBoundaries = detectBoundaries(pixmap, false, SHEET_ROWS);
 
-        // Textures aren't square — lock height to SIZE and scale width to match,
-        // so sprites aren't stretched. Width naturally varies by pose (a running
-        // lunge is wider than a standing idle frame), which is correct.
-        idleDrawH = SIZE;
-        idleDrawW = texture.getWidth() * (SIZE / texture.getHeight());
-        runDrawH = SIZE;
-        runDrawW = runTexture.getWidth() * (SIZE / runTexture.getHeight());
+        spriteSheet = new Texture(pixmap);
+        pixmap.dispose();
+
+        walkAnimations = new Animation[SHEET_ROWS];
+        for (int row = 0; row < SHEET_ROWS; row++) {
+            TextureRegion[] frames = new TextureRegion[SHEET_COLUMNS];
+            int y0 = rowBoundaries[row], y1 = rowBoundaries[row + 1];
+            for (int col = 0; col < SHEET_COLUMNS; col++) {
+                int x0 = colBoundaries[col], x1 = colBoundaries[col + 1];
+                frames[col] = new TextureRegion(spriteSheet, x0, y0, x1 - x0, y1 - y0);
+            }
+            walkAnimations[row] = new Animation<>(FRAME_DURATION, frames);
+        }
+    }
+
+    /**
+     * Finds expectedFrames boundaries along one axis by locating fully-transparent
+     * gutters between frames and cutting at the midpoint of each gutter. Falls back to
+     * a uniform grid if the sheet doesn't actually have expectedFrames content runs
+     * (an unexpected layout — better to degrade to the old behavior than guess wrong).
+     */
+    private static int[] detectBoundaries(Pixmap pixmap, boolean horizontal, int expectedFrames) {
+        int length = horizontal ? pixmap.getWidth() : pixmap.getHeight();
+        int otherLength = horizontal ? pixmap.getHeight() : pixmap.getWidth();
+
+        boolean[] hasContent = new boolean[length];
+        for (int i = 0; i < length; i++) {
+            for (int j = 0; j < otherLength; j++) {
+                int px = horizontal ? i : j;
+                int py = horizontal ? j : i;
+                int alpha = pixmap.getPixel(px, py) & 0xFF;
+                if (alpha > ALPHA_THRESHOLD) {
+                    hasContent[i] = true;
+                    break;
+                }
+            }
+        }
+
+        List<int[]> runs = new ArrayList<>(); // each is [start, endInclusive]
+        int runStart = -1;
+        for (int i = 0; i < length; i++) {
+            if (hasContent[i] && runStart == -1) {
+                runStart = i;
+            } else if (!hasContent[i] && runStart != -1) {
+                runs.add(new int[]{runStart, i - 1});
+                runStart = -1;
+            }
+        }
+        if (runStart != -1) runs.add(new int[]{runStart, length - 1});
+
+        int[] boundaries = new int[expectedFrames + 1];
+        if (runs.size() != expectedFrames) {
+            for (int i = 0; i <= expectedFrames; i++) {
+                boundaries[i] = Math.round(i * length / (float) expectedFrames);
+            }
+            return boundaries;
+        }
+
+        boundaries[0] = 0;
+        boundaries[expectedFrames] = length;
+        for (int i = 1; i < expectedFrames; i++) {
+            int prevEnd = runs.get(i - 1)[1];
+            int nextStart = runs.get(i)[0];
+            boundaries[i] = (prevEnd + nextStart + 1) / 2;
+        }
+        return boundaries;
     }
 
     // applies a received PlayerInput — used by host to move P2
@@ -116,12 +199,7 @@ private boolean isMoving = false;
         if (input.left)  dx -= SPEED * delta;
         if (input.right) dx += SPEED * delta;
 
-        isMoving=(dx!=0 || dy!=0);
-
-        if (!world.collides(x + dx, y, SIZE, SIZE, side)) x += dx;
-        if (!world.collides(x, y + dy, SIZE, SIZE, side)) y += dy;
-
-        updateCamera();
+        move(dx, dy, delta);
     }
 
     // reads keyboard and moves — used by host for P1
@@ -132,7 +210,20 @@ private boolean isMoving = false;
         if (Gdx.input.isKeyPressed(keyLeft))  dx -= SPEED * delta;
         if (Gdx.input.isKeyPressed(keyRight)) dx += SPEED * delta;
 
-        isMoving=(dx!=0 || dy!=0);
+        move(dx, dy, delta);
+    }
+
+    private void move(float dx, float dy, float delta) {
+        isMoving = (dx != 0 || dy != 0);
+
+        // Diagonal input faces the side sprite (horizontal takes priority over vertical).
+        if (dx < 0) facing = Direction.LEFT;
+        else if (dx > 0) facing = Direction.RIGHT;
+        else if (dy > 0) facing = Direction.UP;
+        else if (dy < 0) facing = Direction.DOWN;
+
+        stateTime = isMoving ? stateTime + delta : 0f;
+
         if (!world.collides(x + dx, y, SIZE, SIZE, side)) x += dx;
         if (!world.collides(x, y + dy, SIZE, SIZE, side)) y += dy;
 
@@ -173,24 +264,19 @@ private boolean isMoving = false;
         shape.rect(x + SIZE - 7f, y + SIZE - 18f, 7f, 7f);
     }
 
-    public void draw(SpriteBatch batch)
-    {
-        if(texture==null || runTexture==null) return;
-        if(isMoving)
-        {
-            float drawX = x + (SIZE - runDrawW) / 2f;
-            batch.draw(runTexture, drawX, y, runDrawW, runDrawH);
-        }
-        else
-        {
-            float drawX = x + (SIZE - idleDrawW) / 2f;
-            batch.draw(texture, drawX, y, idleDrawW, idleDrawH);
-        }
+    public void draw(SpriteBatch batch) {
+        if (walkAnimations == null) return;
+        TextureRegion frame = walkAnimations[facing.ordinal()].getKeyFrame(stateTime, true);
+
+        // Detected frame boundaries aren't perfectly uniform width, so scale per-frame
+        // (height locked to SIZE, width proportional) rather than reusing one fixed size.
+        float drawH = SIZE;
+        float drawW = frame.getRegionWidth() * (SIZE / (float) frame.getRegionHeight());
+        float drawX = x + (SIZE - drawW) / 2f;
+        batch.draw(frame, drawX, y, drawW, drawH);
     }
 
-
-public void dispose() {
-    if (texture != null) texture.dispose();
-    if (runTexture != null) runTexture.dispose();
-}
+    public void dispose() {
+        if (spriteSheet != null) spriteSheet.dispose();
+    }
 }
