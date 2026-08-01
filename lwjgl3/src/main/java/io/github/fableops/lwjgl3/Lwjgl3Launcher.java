@@ -1,5 +1,6 @@
 package io.github.fableops.lwjgl3;
 
+import com.badlogic.gdx.Graphics;
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3Application;
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3ApplicationConfiguration;
 
@@ -9,11 +10,27 @@ import io.github.fableops.Main;
 public class Lwjgl3Launcher {
     public static void main(String[] args) {
         if (StartupHelper.startNewJvmIfRequired()) return; // This handles macOS support and helps on Windows.
-        createApplication();
+
+        String mode = argValue(args, "--mode=");
+        String ip = argValue(args, "--ip=");
+        launch(mode, ip);
     }
 
-    private static Lwjgl3Application createApplication() {
-        return new Lwjgl3Application(new Main(), getDefaultConfiguration());
+    private static String argValue(String[] args, String prefix) {
+        for (String arg : args) {
+            if (arg.startsWith(prefix)) return arg.substring(prefix.length());
+        }
+        return null;
+    }
+
+    /**
+     * Starts the game directly with a given mode ("host"/"join"/"debug"), skipping
+     * LobbyScreen. Used both by the --mode= CLI flag above and by the JavaFX launcher
+     * calling in-process after closing its own window. mode == null falls back to the
+     * normal LobbyScreen entry point.
+     */
+    public static void launch(String mode, String ip) {
+        new Lwjgl3Application(new Main(mode, ip), getDefaultConfiguration());
     }
 
     private static Lwjgl3ApplicationConfiguration getDefaultConfiguration() {
@@ -29,7 +46,11 @@ public class Lwjgl3Launcher {
         //// useful for testing performance, but can also be very stressful to some hardware.
         //// You may also need to configure GPU drivers to fully disable Vsync; this can cause screen tearing.
 
-        configuration.setFullscreenMode(Lwjgl3ApplicationConfiguration.getDisplayMode());
+        // Borderless window sized to the full display, not exclusive fullscreen — exclusive
+        // fullscreen was blocking Alt+Tab from reliably switching away from the game.
+        Graphics.DisplayMode display = Lwjgl3ApplicationConfiguration.getDisplayMode();
+        configuration.setWindowedMode(display.width, display.height);
+        configuration.setDecorated(false);
         //// You can change these files; they are in lwjgl3/src/main/resources/ .
         //// They can also be loaded from the root of assets/ .
         configuration.setWindowIcon("libgdx128.png", "libgdx64.png", "libgdx32.png", "libgdx16.png");

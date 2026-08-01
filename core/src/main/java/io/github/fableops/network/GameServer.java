@@ -89,8 +89,9 @@ public class GameServer {
         try {
             if (clientSocket != null && !clientSocket.isClosed()) clientSocket.close();
             if (serverSocket != null && !serverSocket.isClosed()) serverSocket.close();
-        } catch (IOException e) {
-            e.printStackTrace();
+        } catch (IOException ignored) {
+            // Closing an already-closing socket during shutdown — benign, matches
+            // the same pattern in HostSession.stop()/ClientSession.stop().
         }
     }
 }
