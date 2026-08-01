@@ -5,7 +5,7 @@ import com.badlogic.gdx.maps.tiled.TmxMapLoader;
 import com.badlogic.gdx.maps.tiled.renderers.OrthogonalTiledMapRenderer;
 import com.badlogic.gdx.maps.tiled.TiledMap;
 
-public class WorldMap {
+public class WorldMap implements Collidable {
 
     // world is larger than one screen — players explore it
     public static final float WORLD_W = 1920f;
@@ -29,10 +29,17 @@ public class WorldMap {
         renderer.dispose();
     }
 
-    public boolean collides(float x, float y, float w, float h) {
+    @Override
+    public boolean collides(float x, float y, float w, float h, int playerSide) {
         if (x < 0 || y < 0 || x + w > WORLD_W || y + h > WORLD_H) return true;
         return false;
     }
+
+    @Override
+    public float getWorldWidth() { return WORLD_W; }
+
+    @Override
+    public float getWorldHeight() { return WORLD_H; }
 
  /*    // walls: x, y, width, height
     private static final float[][] WALLS = {

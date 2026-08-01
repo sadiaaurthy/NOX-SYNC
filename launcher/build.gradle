@@ -1,0 +1,20 @@
+plugins {
+  id "application"
+  id "org.openjfx.javafxplugin" version "0.1.0"
+}
+
+application.mainClass = 'io.github.fableops.launcher.LauncherApp'
+eclipse.project.name = appName + '-launcher'
+
+javafx {
+  version = "21.0.2"
+  modules = ["javafx.controls", "javafx.fxml"]
+}
+
+dependencies {
+  implementation project(':lwjgl3')
+}
+
+run {
+  jvmArgs += "--enable-native-access=ALL-UNNAMED"
+}

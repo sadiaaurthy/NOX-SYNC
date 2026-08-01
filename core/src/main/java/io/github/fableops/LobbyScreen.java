@@ -11,8 +11,7 @@ import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 
-import io.github.fableops.network.GameClient;
-import io.github.fableops.network.GameServer;
+import io.github.fableops.network.SessionLauncher;
 
 public class LobbyScreen implements Screen {
 
@@ -75,7 +74,7 @@ public class LobbyScreen implements Screen {
             }
             // D = debug mode, no networking, both players local
             if (Gdx.input.isKeyJustPressed(Input.Keys.D)) {
-                game.setScreen(new GameScreen(null, null));
+                SessionLauncher.debug(game);
             }
         } else {
             for (int k = Input.Keys.NUM_0; k <= Input.Keys.NUM_9; k++) {
@@ -95,36 +94,14 @@ public class LobbyScreen implements Screen {
     }
 
     private void startHost() {
-        GameServer server = new GameServer();
-        new Thread(() -> {
-            try {
-                server.start();
-                Gdx.app.postRunnable(() ->
-                    game.setScreen(new GameScreen(server, null))
-                );
-            } catch (Exception e) {
-                Gdx.app.postRunnable(() ->
-                    statusMessage = "Failed to start server: " + e.getMessage()
-                );
-            }
-        }).start();
+        SessionLauncher.host(game, message -> statusMessage = message);
     }
 
     private void startClient(String ip) {
-        GameClient client = new GameClient();
-        new Thread(() -> {
-            try {
-                client.connect(ip);
-                Gdx.app.postRunnable(() ->
-                    game.setScreen(new GameScreen(null, client))
-                );
-            } catch (Exception e) {
-                Gdx.app.postRunnable(() -> {
-                    statusMessage = "Connection failed. Check IP and try again.";
-                    waitingForIP = false;
-                });
-            }
-        }).start();
+        SessionLauncher.join(game, ip, () -> {
+            statusMessage = "Connection failed. Check IP and try again.";
+            waitingForIP = false;
+        });
     }
 
     private String getLocalIP() {
