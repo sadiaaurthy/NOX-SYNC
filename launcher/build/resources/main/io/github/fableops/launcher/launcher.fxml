@@ -26,8 +26,8 @@
         </HBox>
     </VBox>
 
-    <StackPane StackPane.alignment="CENTER_RIGHT">
-        <VBox styleClass="panel-column" maxWidth="430" alignment="CENTER_LEFT" StackPane.alignment="CENTER_RIGHT">
+    <StackPane StackPane.alignment="CENTER">
+        <VBox styleClass="panel-column" maxWidth="430" alignment="CENTER_LEFT" StackPane.alignment="CENTER">
 
             <Label styleClass="eyebrow" text="&#9632; ACCESS TERMINAL 03" />
 

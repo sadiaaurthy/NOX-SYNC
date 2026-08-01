@@ -120,8 +120,10 @@ public class Level1Screen implements Screen {
             world, CAM_W, CAM_H, 2
         );
 
-        player1.setTexture("Walking.png", "Running.png");
-        player2.setTexture("Hacker_walking.png", "Hacker_run.png");
+        // hackerspritesheet.png continues the existing "Hacker" naming for P2;
+        // brawlspritesheet.png takes the remaining slot for P1.
+        player1.setTexture("brawlspritesheet.png");
+        player2.setTexture("hackerspritesheet.png");
 
         if (isHost && hostSession != null) {
             setupHostPuzzle();
@@ -342,8 +344,8 @@ public class Level1Screen implements Screen {
         Player localPlayer = isHost ? player1 : player2;
         float[][] terminals = isHost ? world.getTerminalSpotsP1() : world.getTerminalSpotsP2();
 
-        nearTerminal = isNearAnyTerminal(localPlayer, terminals);
-        if (nearTerminal && myStageView != null && Gdx.input.isKeyJustPressed(Input.Keys.E)) {
+        nearTerminal = isNearStageTerminal(localPlayer, terminals, myStageView);
+        if (nearTerminal && Gdx.input.isKeyJustPressed(Input.Keys.E)) {
             myPopup.open(myStageView, isHost ? 1 : 2);
         }
     }
@@ -354,8 +356,8 @@ public class Level1Screen implements Screen {
     // are open — every other key stays reserved for whichever popup is focused, so
     // typing a digit never leaks into the other terminal's input.
     private void handleDebugPuzzleInteraction() {
-        boolean p1Near = isNearAnyTerminal(player1, world.getTerminalSpotsP1());
-        boolean p2Near = isNearAnyTerminal(player2, world.getTerminalSpotsP2());
+        boolean p1Near = isNearStageTerminal(player1, world.getTerminalSpotsP1(), debugP1View);
+        boolean p2Near = isNearStageTerminal(player2, world.getTerminalSpotsP2(), debugP2View);
         nearTerminal = (p1Near && !popupP1.isOpen()) || (p2Near && !popupP2.isOpen());
 
         if (!popupP1.isOpen() && p1Near && debugP1View != null && Gdx.input.isKeyJustPressed(Input.Keys.E)) {
@@ -376,15 +378,19 @@ public class Level1Screen implements Screen {
         if (popupP2.isOpen() && (!bothOpen || debugFocusedPlayerId == 2)) popupP2.handleInput();
     }
 
-    private boolean isNearAnyTerminal(Player player, float[][] terminals) {
-        for (float[] spot : terminals) {
-            float dx = (player.x + Player.SIZE / 2f) - (spot[0] + Player.SIZE / 2f);
-            float dy = (player.y + Player.SIZE / 2f) - (spot[1] + Player.SIZE / 2f);
-            if (dx * dx + dy * dy <= INTERACT_RANGE * INTERACT_RANGE) {
-                return true;
-            }
-        }
-        return false;
+    // Each of the 3 terminal spots is dedicated to one stage (matches the 3 physical
+    // console panels drawn in the art) — being near terminal 0 only ever opens Stage 1,
+    // terminal 1 only Stage 2, terminal 2 only Stage 3, instead of any terminal working
+    // for whichever stage happens to be active.
+    private boolean isNearStageTerminal(Player player, float[][] terminals, CodeFragmentPayload view) {
+        if (view == null) return false;
+        int index = view.getStageNumber() - 1;
+        if (index < 0 || index >= terminals.length) return false;
+
+        float[] spot = terminals[index];
+        float dx = (player.x + Player.SIZE / 2f) - (spot[0] + Player.SIZE / 2f);
+        float dy = (player.y + Player.SIZE / 2f) - (spot[1] + Player.SIZE / 2f);
+        return dx * dx + dy * dy <= INTERACT_RANGE * INTERACT_RANGE;
     }
 
     private void drawWorld() {

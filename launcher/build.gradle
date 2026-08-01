@@ -3,7 +3,8 @@ plugins {
   id "org.openjfx.javafxplugin" version "0.1.0"
 }
 
-application.mainClass = 'io.github.fableops.launcher.LauncherApp'
+// Launcher (not LauncherApp) is the entry point on purpose — see Launcher.java.
+application.mainClass = 'io.github.fableops.launcher.Launcher'
 eclipse.project.name = appName + '-launcher'
 
 javafx {
