@@ -14,6 +14,9 @@ javafx {
 
 dependencies {
   implementation project(':lwjgl3')
+  // Explicit: ':lwjgl3' depends on ':core' with `implementation`, which is not
+  // transitive at compile time, so the launcher needs its own view of core.
+  implementation project(':core')
 }
 
 run {

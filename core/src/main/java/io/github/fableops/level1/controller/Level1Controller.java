@@ -91,6 +91,21 @@ public class Level1Controller {
         }
     }
 
+    /**
+     * Debug shortcut: marks the current stage solved and moves on, exactly as if every
+     * position had been entered correctly. Deliberately routed through the same
+     * advance/unlock path as a real solve so it can't drift from normal progression.
+     */
+    public void skipCurrentStage() {
+        if (stageNumber == 3) {
+            alertMeter.reset();
+            listener.onReactorUnlocked();
+            if (hostSession != null) hostSession.send(new ReactorUnlockMessage());
+        } else {
+            enterStage(stageNumber + 1);
+        }
+    }
+
     /** Actually performs a restart — called once the player acknowledges the mission-failed banner. */
     public void restartLevel1() {
         listener.onLevelRestart();

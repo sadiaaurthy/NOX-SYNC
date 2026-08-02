@@ -4,8 +4,10 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
+import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+import com.badlogic.gdx.utils.Align;
 
 import java.util.List;
 
@@ -50,6 +52,9 @@ public class CodePopupUI {
     private String currentInput = "";
     private int playerSide = 1; // 1 = left half, 2 = right half
     private SubmitListener listener;
+    // Only meaningful in Debug mode, where both popups can be open on one keyboard.
+    // Host/client each own a single popup and leave this true for its whole lifetime.
+    private boolean focused = true;
 
     private final BitmapFont titleFont;
     private final BitmapFont bodyFont;
@@ -85,29 +90,29 @@ public class CodePopupUI {
         return open;
     }
 
-    /** Swaps in a new view (e.g. after advancing to the next stage) without closing the popup. */
-    public void updatePayload(CodeFragmentPayload payload) {
-        this.payload = payload;
-        this.selectedIndex = 0;
-        this.currentInput = "";
+    /** Marks this terminal as the one currently receiving keystrokes (Debug mode). */
+    public void setFocused(boolean focused) {
+        this.focused = focused;
     }
 
     public void handleInput() {
         if (!open || payload == null) return;
 
-        List<Integer> owned = payload.getOwnedPositions();
-        if (owned.isEmpty()) return;
-
+        // ESC is checked before the "nothing to submit" guard below — Stage 2's
+        // legend-holder owns no positions, and returning early left them unable to
+        // close their own popup at all.
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
             close();
             return;
         }
-        if (Gdx.input.isKeyJustPressed(Input.Keys.TAB) || Gdx.input.isKeyJustPressed(Input.Keys.RIGHT)) {
+
+        List<Integer> owned = payload.getOwnedPositions();
+        if (owned.isEmpty()) return;
+
+        // TAB only — arrow keys stay reserved for Player 2's movement, which shares one
+        // keyboard with this popup in Debug mode.
+        if (Gdx.input.isKeyJustPressed(Input.Keys.TAB)) {
             selectedIndex = (selectedIndex + 1) % owned.size();
-            currentInput = "";
-        }
-        if (Gdx.input.isKeyJustPressed(Input.Keys.LEFT)) {
-            selectedIndex = (selectedIndex - 1 + owned.size()) % owned.size();
             currentInput = "";
         }
         for (int k = Input.Keys.NUM_0; k <= Input.Keys.NUM_9; k++) {
@@ -144,23 +149,27 @@ public class CodePopupUI {
 
         drawNotchedPanel(shape, panelX, panelY, panelW, panelH);
 
+        // Every line is drawn wrapped to the panel's inner width, and lineY advances by
+        // the laid-out height, so long strings wrap inside the panel instead of running
+        // off its right edge. All label text is ASCII — the default BitmapFont has no
+        // glyphs for box-drawing characters and renders them as empty squares.
+        float contentW = panelW - 2 * PADDING;
+
         batch.begin();
         float lineY = panelY + panelH - PADDING;
 
         eyebrowFont.setColor(COLOR_MAGENTA);
-        eyebrowFont.draw(batch, "■ REACTOR TERMINAL", panelX + PADDING, lineY);
-        lineY -= 22;
+        lineY -= drawWrapped(batch, eyebrowFont, "// REACTOR TERMINAL", panelX + PADDING, lineY, contentW) + 8;
 
         titleFont.setColor(COLOR_ORANGE);
         titleFont.draw(batch, "STAGE " + payload.getStageNumber(), panelX + PADDING, lineY);
         eyebrowFont.setColor(COLOR_ORANGE_DIM);
-        eyebrowFont.draw(batch, "■■□", panelX + panelW - PADDING - 40f, lineY);
+        eyebrowFont.draw(batch, "[##-]", panelX + panelW - PADDING - 46f, lineY);
         lineY -= 34;
 
         bodyFont.setColor(COLOR_CYAN);
         for (String line : payload.getDisplayLines()) {
-            bodyFont.draw(batch, line, panelX + PADDING, lineY);
-            lineY -= 26;
+            lineY -= drawWrapped(batch, bodyFont, line, panelX + PADDING, lineY, contentW) + 8;
         }
 
         lineY -= 16;
@@ -170,13 +179,24 @@ public class CodePopupUI {
             bodyFont.setColor(selected ? COLOR_TEXT : COLOR_DIM);
             String prefix = selected ? "> " : "   ";
             String value = selected ? currentInput + "_" : "";
-            bodyFont.draw(batch, prefix + "Position " + owned.get(i) + ":  " + value, panelX + PADDING, lineY);
-            lineY -= 28;
+            lineY -= drawWrapped(batch, bodyFont,
+                prefix + "Position " + owned.get(i) + ":  " + value,
+                panelX + PADDING, lineY, contentW) + 10;
         }
 
-        bodyFont.setColor(COLOR_DIM);
-        bodyFont.draw(batch, "TAB switch   ENTER submit   ESC close", panelX + PADDING, panelY + PADDING);
+        bodyFont.setColor(focused ? COLOR_DIM : COLOR_ORANGE);
+        String footer = focused
+            ? "TAB switch   ENTER submit   ESC close"
+            : "SPACE to type here";
+        drawWrapped(batch, bodyFont, footer, panelX + PADDING, panelY + PADDING + 18f, contentW);
         batch.end();
+    }
+
+    /** Draws text wrapped to maxWidth and returns the height it consumed. */
+    private static float drawWrapped(SpriteBatch batch, BitmapFont font,
+                                     String text, float x, float y, float maxWidth) {
+        GlyphLayout layout = font.draw(batch, text, x, y, maxWidth, Align.left, true);
+        return layout.height;
     }
 
     /** Fills + outlines an octagon (rect with corners notched off) instead of a plain rect. */
@@ -197,7 +217,9 @@ public class CodePopupUI {
         shape.line(x + w, y + NOTCH, x + w - NOTCH, y);
         shape.line(x + w - NOTCH, y, x + NOTCH, y);
         shape.line(x + NOTCH, y, x, y + NOTCH);
-        shape.setColor(COLOR_ORANGE);
+        // The focused terminal keeps the bright accent; an unfocused one drops to the
+        // dim border colour so it's obvious at a glance which popup the keyboard drives.
+        shape.setColor(focused ? COLOR_ORANGE : COLOR_DIM);
         shape.line(x, y + h - NOTCH, x + NOTCH, y + h); // top-left notch, accented
         shape.line(x + w - NOTCH, y, x + w, y + NOTCH); // bottom-right notch, accented
         shape.end();

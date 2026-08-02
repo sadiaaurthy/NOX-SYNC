@@ -50,8 +50,14 @@ public class SwarmController {
     }
 
     public void update(float delta, Player player1, Player player2, Collidable world) {
-        for (Enemy e : enemiesP1) e.update(delta, player1, world);
-        for (Enemy e : enemiesP2) e.update(delta, player2, world);
+        updateSide(enemiesP1, delta, player1, world);
+        updateSide(enemiesP2, delta, player2, world);
+    }
+
+    /** Advances one side and clears out enemies whose death animation has played out. */
+    private void updateSide(List<Enemy> list, float delta, Player target, Collidable world) {
+        for (Enemy e : list) e.update(delta, target, world);
+        list.removeIf(Enemy::isFinished);
     }
 
     /** Attacks the nearest living enemy on the given side within range. */
@@ -61,6 +67,7 @@ public class SwarmController {
         float nearestDist = Float.MAX_VALUE;
 
         for (Enemy e : list) {
+            if (!e.isActive()) continue; // already dying — don't waste a hit on a corpse
             float dx = (e.x + Enemy.SIZE / 2f) - x;
             float dy = (e.y + Enemy.SIZE / 2f) - y;
             float dist = dx * dx + dy * dy;
@@ -71,8 +78,8 @@ public class SwarmController {
         }
 
         if (nearest == null) return false;
+        // Removal now waits for the death animation to finish (see updateSide).
         nearest.takeDamage(damage);
-        if (nearest.isDead()) list.remove(nearest);
         return true;
     }
 
@@ -80,6 +87,7 @@ public class SwarmController {
     public boolean isTouchingAny(int side, float x, float y, float w, float h) {
         List<Enemy> list = (side == 1) ? enemiesP1 : enemiesP2;
         for (Enemy e : list) {
+            if (!e.isActive()) continue; // a corpse shouldn't keep damaging the player
             if (x < e.x + Enemy.SIZE && x + w > e.x && y < e.y + Enemy.SIZE && y + h > e.y) {
                 return true;
             }

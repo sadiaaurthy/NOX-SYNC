@@ -41,6 +41,10 @@ public class Player {
     public Color accentColor;
 
     private int keyUp, keyDown, keyLeft, keyRight;
+    // Optional second key for "move right". -1 means unset, and it must be guarded
+    // explicitly rather than passed to isKeyPressed(), because Input.Keys.ANY_KEY is
+    // also -1 and would report true whenever any key at all is held.
+    private int keyRightAlt = -1;
     public OrthographicCamera camera;
     private Collidable world;
 
@@ -99,6 +103,16 @@ public class Player {
 
     public void takeDamage(float amount) {
         health = Math.max(0f, health - amount);
+    }
+
+    /** Adds a second key that also moves this player right, alongside the primary one. */
+    public void setAlternateRightKey(int key) {
+        this.keyRightAlt = key;
+    }
+
+    private boolean isMovingRight() {
+        return Gdx.input.isKeyPressed(keyRight)
+            || (keyRightAlt >= 0 && Gdx.input.isKeyPressed(keyRightAlt));
     }
 
     // reads local keyboard — used by host for P1, by client for P2
@@ -214,7 +228,7 @@ public class Player {
         if (Gdx.input.isKeyPressed(keyUp))    dy += SPEED * delta;
         if (Gdx.input.isKeyPressed(keyDown))  dy -= SPEED * delta;
         if (Gdx.input.isKeyPressed(keyLeft))  dx -= SPEED * delta;
-        if (Gdx.input.isKeyPressed(keyRight)) dx += SPEED * delta;
+        if (isMovingRight())                  dx += SPEED * delta;
 
         move(dx, dy, delta);
     }
