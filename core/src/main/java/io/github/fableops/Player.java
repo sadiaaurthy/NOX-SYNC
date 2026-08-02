@@ -28,6 +28,8 @@ public class Player {
     public float x, y;
     public static final float SIZE = 100f;
     private static final float SPEED = 220f;
+    public static final float MAX_HEALTH = 100f;
+    public float health = MAX_HEALTH;
 
     private Texture spriteSheet;
     private Animation<TextureRegion>[] walkAnimations; // indexed by Direction.ordinal()
@@ -93,6 +95,10 @@ public class Player {
                   Collidable world) {
         this(startX, startY, bodyColor, accentColor,
              -1, -1, -1, -1, world, 960f, 1080f, 1);
+    }
+
+    public void takeDamage(float amount) {
+        health = Math.max(0f, health - amount);
     }
 
     // reads local keyboard — used by host for P1, by client for P2

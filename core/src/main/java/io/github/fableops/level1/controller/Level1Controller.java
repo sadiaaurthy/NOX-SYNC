@@ -83,17 +83,18 @@ public class Level1Controller {
             alertMeter.increase(WRONG_ANSWER_ALERT_INCREASE);
             listener.onAlertMeterChanged(alertMeter.getValue());
             if (hostSession != null) hostSession.send(new AlertMeterUpdateMessage(alertMeter.getValue()));
-            // SwarmController hookup goes here later — not implemented yet.
+            listener.onWrongAnswer(message.getPlayerId());
 
             if (alertMeter.isMax()) {
-                listener.onLevelRestart();
-                if (hostSession != null) hostSession.send(new LevelRestartMessage());
-                restartLevel1();
+                listener.onMissionFailed();
             }
         }
     }
 
+    /** Actually performs a restart — called once the player acknowledges the mission-failed banner. */
     public void restartLevel1() {
+        listener.onLevelRestart();
+        if (hostSession != null) hostSession.send(new LevelRestartMessage());
         startLevel();
     }
 }

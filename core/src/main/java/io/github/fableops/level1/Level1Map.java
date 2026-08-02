@@ -35,6 +35,7 @@ public class Level1Map implements Collidable {
     // Shared center chamber — always physically there, but only reachable once
     // both gates are open (see gateP1Open / gateP2Open).
     private final Rectangle centerChamber;
+    private final Rectangle exitGateZone;
 
     private final Rectangle gateP1;
     private final Rectangle gateP2;
@@ -76,6 +77,7 @@ public class Level1Map implements Collidable {
 
         // --- Shared center reactor chamber ---
         centerChamber = imageRectToWorld(700, 2050, 1200, 1530);
+        exitGateZone = imageRectToWorld(1280, 1470, 1470, 1536);
 
         allTracedFloor.addAll(floorP1);
         allTracedFloor.addAll(floorP2);
@@ -83,6 +85,11 @@ public class Level1Map implements Collidable {
         allTracedFloor.add(gateP2);
         allTracedFloor.add(centerChamber);
     }
+
+    public Rectangle getExitGateZone()
+        {
+            return exitGateZone;
+        }
 
     private void addFloorRect(List<Rectangle> list, float x1, float x2, float yTop, float yBottom) {
         list.add(imageRectToWorld(x1, x2, yTop, yBottom));
@@ -111,7 +118,7 @@ public class Level1Map implements Collidable {
     // is still confined to the union of every traced rectangle, not the whole rectangular
     // world border, so players can't wander into the black void between/around the
     // building's wings. Flip back to true once internal walls come back for real.
-    private static final boolean INTERNAL_WALLS_ENABLED = false;
+    private static final boolean INTERNAL_WALLS_ENABLED = true;
 
     @Override
     public boolean collides(float x, float y, float w, float h, int playerSide) {
@@ -185,6 +192,29 @@ public class Level1Map implements Collidable {
         float centerX = spot[0] + 50f;
         float centerY = spot[1] + 50f;
         shape.circle(centerX, centerY, 22f, 24);
+    }
+
+    /**
+     * Draws every collision rectangle currently in use — green for floor (walkable),
+     * orange for gates, magenta for the center chamber — so the actual collision
+     * geometry can be compared directly against the art instead of guessing.
+     */
+    public void renderDebugCollision(ShapeRenderer shape, OrthographicCamera camera) {
+        shape.setProjectionMatrix(camera.combined);
+        shape.begin(ShapeRenderer.ShapeType.Line);
+
+        shape.setColor(0f, 1f, 0f, 1f);
+        for (Rectangle r : floorP1) shape.rect(r.x, r.y, r.width, r.height);
+        for (Rectangle r : floorP2) shape.rect(r.x, r.y, r.width, r.height);
+
+        shape.setColor(1f, 0.6f, 0f, 1f);
+        shape.rect(gateP1.x, gateP1.y, gateP1.width, gateP1.height);
+        shape.rect(gateP2.x, gateP2.y, gateP2.width, gateP2.height);
+
+        shape.setColor(1f, 0f, 1f, 1f);
+        shape.rect(centerChamber.x, centerChamber.y, centerChamber.width, centerChamber.height);
+
+        shape.end();
     }
 
     public void dispose() {

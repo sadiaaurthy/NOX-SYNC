@@ -1,7 +1,7 @@
 package io.github.fableops.level1.model;
 
 public class AlertMeter {
-    private static final int MAX_VALUE = 100;
+    public static final int MAX_VALUE = 100;
 
     private int value = 0;
 

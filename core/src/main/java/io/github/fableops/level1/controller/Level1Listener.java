@@ -9,4 +9,6 @@ public interface Level1Listener {
     void onDigitAccepted(int positionIndex);
     void onReactorUnlocked();
     void onLevelRestart();
+    void onWrongAnswer(int offendingPlayerId);
+    void onMissionFailed();
 }
