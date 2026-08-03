@@ -103,6 +103,23 @@ public class Enemy {
         TextureRegion frame = dying
             ? sprites.deathFrame(facingRight, deathTime)
             : sprites.walkFrame(facing, stateTime);
-        batch.draw(frame, x + DRAW_OFFSET, y + DRAW_OFFSET, DRAW_SIZE, DRAW_SIZE);
+
+        // Not every frame is the full uniform cell anymore (EnemySprites trims the
+        // row-2 walk row's height and the death rows have irregular per-frame widths),
+        // so stretching every frame into a fixed DRAW_SIZE x DRAW_SIZE box would make
+        // trimmed/narrower frames visibly stretch relative to full-cell ones. Scaling
+        // each frame by its own actual pixel size against the shared uniform-cell
+        // reference instead keeps the per-pixel scale identical across every frame —
+        // full-cell frames (unchanged: 3 of 4 walk rows) come out at exactly DRAW_SIZE,
+        // byte-for-byte the same as before. Centering horizontally and anchoring the
+        // top vertically means any trimmed edge only ever eats into empty space that
+        // was already below the feet (row-2 walk) or beyond the sides (death rows),
+        // never shifting the character's own visible pixels or the floor contact point.
+        float scale = DRAW_SIZE / EnemySprites.CELL_SIZE;
+        float drawW = frame.getRegionWidth() * scale;
+        float drawH = frame.getRegionHeight() * scale;
+        float offX = (DRAW_SIZE - drawW) / 2f;
+        float offY = DRAW_SIZE - drawH;
+        batch.draw(frame, x + DRAW_OFFSET + offX, y + DRAW_OFFSET + offY, drawW, drawH);
     }
 }
