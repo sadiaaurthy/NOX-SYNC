@@ -1,5 +1,7 @@
 package io.github.fableops.level1.controller;
 
+import com.badlogic.gdx.Gdx;
+
 import io.github.fableops.level1.model.AlertMeter;
 import io.github.fableops.level1.model.StageData;
 import io.github.fableops.level1.network.AlertMeterUpdateMessage;
@@ -32,11 +34,19 @@ public class Level1Controller {
         this.listener = listener;
     }
 
-    /** Wire this into hostSession.setListener(...) to route incoming client messages here. */
+    /**
+     * Wire this into hostSession.setListener(...) to route incoming client messages here.
+     * dispatch() runs on HostSession's own network-reader thread, but every gameplay
+     * mutation below (puzzle state, AlertMeter, SwarmController) is host-authoritative and
+     * only ever safe on the libGDX render thread — the same thread update()/reset() already
+     * run on. Deserializing here is pure parsing with no shared state, so it stays outside
+     * the post; only the actual handling is marshaled over.
+     */
     public MessageListener asMessageListener() {
         return (type, body) -> {
             if ("ENTERED_DIGIT".equals(type)) {
-                handleEnteredDigit(EnteredDigitMessage.deserialize(body));
+                EnteredDigitMessage entered = EnteredDigitMessage.deserialize(body);
+                Gdx.app.postRunnable(() -> handleEnteredDigit(entered));
             }
         };
     }
