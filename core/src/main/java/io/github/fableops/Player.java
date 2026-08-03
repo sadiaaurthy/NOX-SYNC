@@ -25,6 +25,15 @@ public class Player {
     private static final float FRAME_DURATION = 0.1f; // 8 frames * 0.1s = 0.8s per walk cycle
     private static final int ALPHA_THRESHOLD = 20; // ignore faint anti-aliasing dust in gutters
 
+    // ---- procedural combat visual feedback (walk sprites only — no dedicated frames) ----
+    private static final float ATTACK_VISUAL_DURATION = 0.18f; // seconds, within the 0.16-0.20 target
+    private static final float HURT_FLASH_DURATION = 0.18f;    // seconds, within the 0.15-0.22 target
+    private static final float HURT_TINT_STRENGTH = 0.65f;     // how far G/B channels drop at peak flash
+    private static final float ATTACK_LUNGE_DISTANCE = 10f;    // draw-offset only, world x/y never move
+    private static final float ATTACK_SCALE_AMOUNT = 0.06f;    // subtle +/-6% pulse at the peak of the lunge
+    private static final float DEAD_ROTATION_DEGREES = 85f;
+    private static final float DEAD_ALPHA = 0.65f;
+
     public float x, y;
     public static final float SIZE = 100f;
     private static final float SPEED = 220f;
@@ -36,6 +45,12 @@ public class Player {
     private float stateTime = 0f;
     private Direction facing = Direction.DOWN;
     private boolean isMoving = false;
+
+    // Visual-only timers — never affect x/y, collision, or camera. Death has no timer of
+    // its own; it's read directly off `health <= 0`, the same source of truth the rest of
+    // the game already uses, so it can never drift out of sync or need its own removal logic.
+    private float attackVisualTimer = 0f;
+    private float hurtVisualTimer = 0f;
 
     public Color bodyColor;
     public Color accentColor;
@@ -102,7 +117,36 @@ public class Player {
     }
 
     public void takeDamage(float amount) {
-        health = Math.max(0f, health - amount);
+        if (amount <= 0f) return; // zero/negative damage must not trigger the hurt flash
+        float newHealth = Math.max(0f, health - amount);
+        if (newHealth < health) triggerHurtVisual(); // only fires when health actually dropped
+        health = newHealth;
+    }
+
+    /** Starts (or restarts) the short attack lunge/pulse. Call exactly once per accepted swing. */
+    public void triggerAttackVisual() {
+        attackVisualTimer = ATTACK_VISUAL_DURATION;
+    }
+
+    /** Starts (or refreshes) the hurt flash — continuous contact keeps extending it. */
+    private void triggerHurtVisual() {
+        hurtVisualTimer = HURT_FLASH_DURATION;
+    }
+
+    /**
+     * Advances the visual-only timers. Independent of movement/input — must be called
+     * once per frame regardless of whether this player is moving, has a popup open, or
+     * the mission has failed, so an in-flight lunge/flash always finishes cleanly.
+     */
+    public void updateVisualState(float delta) {
+        if (attackVisualTimer > 0f) attackVisualTimer = Math.max(0f, attackVisualTimer - delta);
+        if (hurtVisualTimer > 0f) hurtVisualTimer = Math.max(0f, hurtVisualTimer - delta);
+    }
+
+    /** Clears every temporary visual-only state. Called from every Level 1 restart handler. */
+    public void resetVisualState() {
+        attackVisualTimer = 0f;
+        hurtVisualTimer = 0f;
     }
 
     /** Adds a second key that also moves this player right, alongside the primary one. */
@@ -293,7 +337,47 @@ public class Player {
         float drawH = SIZE;
         float drawW = frame.getRegionWidth() * (SIZE / (float) frame.getRegionHeight());
         float drawX = x + (SIZE - drawW) / 2f;
-        batch.draw(frame, drawX, y, drawW, drawH);
+        float drawY = y;
+
+        boolean isDead = health <= 0f;
+
+        // Attack lunge/pulse — visual-offset only, x/y (gameplay position) never changes.
+        // Suppressed once dead so a stale timer can't animate a corpse.
+        float offsetX = 0f, offsetY = 0f;
+        float scale = 1f;
+        if (!isDead && attackVisualTimer > 0f) {
+            float progress = 1f - (attackVisualTimer / ATTACK_VISUAL_DURATION); // 0 at trigger -> 1 at end
+            float curve = (float) Math.sin(progress * Math.PI); // eases out and back to 0, never snaps
+            float lunge = curve * ATTACK_LUNGE_DISTANCE;
+            switch (facing) {
+                case DOWN:  offsetY = -lunge; break;
+                case UP:    offsetY = lunge; break;
+                case LEFT:  offsetX = -lunge; break;
+                case RIGHT: offsetX = lunge; break;
+            }
+            scale = 1f + curve * ATTACK_SCALE_AMOUNT;
+        }
+
+        float rotation = 0f;
+        float alpha = 1f;
+        float tintG = 1f, tintB = 1f;
+
+        // Death rendering takes priority over the hurt flash — a corpse never flashes red.
+        if (isDead) {
+            rotation = DEAD_ROTATION_DEGREES;
+            alpha = DEAD_ALPHA;
+        } else if (hurtVisualTimer > 0f) {
+            float hurtProgress = hurtVisualTimer / HURT_FLASH_DURATION; // 1 at trigger -> 0 as it fades
+            tintG = 1f - HURT_TINT_STRENGTH * hurtProgress;
+            tintB = 1f - HURT_TINT_STRENGTH * hurtProgress;
+        }
+
+        // origin = sprite centre, so both the attack scale pulse and the dead rotation
+        // pivot around the middle of the sprite rather than its bottom-left corner.
+        batch.setColor(1f, tintG, tintB, alpha);
+        batch.draw(frame, drawX + offsetX, drawY + offsetY, drawW / 2f, drawH / 2f, drawW, drawH,
+            scale, scale, rotation);
+        batch.setColor(1f, 1f, 1f, 1f); // restore — never leave the next draw call tinted/faded
     }
 
     public void dispose() {

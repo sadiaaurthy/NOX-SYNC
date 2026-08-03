@@ -287,6 +287,8 @@ public class Level1Screen implements Screen {
                 swarmController.reset();
                 player1.health = Player.MAX_HEALTH;
                 player2.health = Player.MAX_HEALTH;
+                player1.resetVisualState();
+                player2.resetVisualState();
                 missionFailed = false;
                 resultsShown = false;
                 resultsHandledExternally = false;
@@ -337,6 +339,8 @@ public class Level1Screen implements Screen {
                     remoteEnemiesP2.clear();
                     player1.health = Player.MAX_HEALTH;
                     player2.health = Player.MAX_HEALTH;
+                    player1.resetVisualState();
+                    player2.resetVisualState();
                     missionFailed = false;
                     resultsShown = false;
                     resultsHandledExternally = false;
@@ -416,6 +420,8 @@ public class Level1Screen implements Screen {
                 swarmController.reset();
                 player1.health = Player.MAX_HEALTH;
                 player2.health = Player.MAX_HEALTH;
+                player1.resetVisualState();
+                player2.resetVisualState();
                 missionFailed = false;
                 resultsShown = false;
                 resultsHandledExternally = false;
@@ -468,6 +474,11 @@ public class Level1Screen implements Screen {
             debugController.skipCurrentStage();
         }
 
+        // Visual-only timers (attack lunge, hurt flash) — always ticking, regardless of
+        // mode, popup state, or mission failure, so an in-flight effect always finishes.
+        player1.updateVisualState(delta);
+        player2.updateVisualState(delta);
+
         if (isDebug) {
             updateAsDebug(delta);
         } else if (isHost) {
@@ -497,11 +508,13 @@ public class Level1Screen implements Screen {
         attackCooldownP2 = Math.max(0f, attackCooldownP2 - delta);
 
         if (p1Attacking && attackCooldownP1 <= 0f) {
+            player1.triggerAttackVisual();
             swarmController.attackNearest(1, player1.x + Player.SIZE / 2f, player1.y + Player.SIZE / 2f,
                 ATTACK_RANGE, ATTACK_DAMAGE);
             attackCooldownP1 = ATTACK_COOLDOWN;
         }
         if (p2Attacking && attackCooldownP2 <= 0f) {
+            player2.triggerAttackVisual();
             swarmController.attackNearest(2, player2.x + Player.SIZE / 2f, player2.y + Player.SIZE / 2f,
                 ATTACK_RANGE, ATTACK_DAMAGE);
             attackCooldownP2 = ATTACK_COOLDOWN;
