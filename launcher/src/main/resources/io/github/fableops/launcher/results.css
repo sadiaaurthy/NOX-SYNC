@@ -1,0 +1,83 @@
+/* Results screen — shares the launcher's palette so the death/complete screen and the
+   intro read as one product. Kept as a real stylesheet (not inline styles) so colours
+   can be retuned here without touching Java. */
+* {
+    -fo-bg-0: #050506;
+    -fo-line: #242220;
+    -fo-line-strong: #4A3D2E;
+    -fo-orange: #FF8A3D;
+    -fo-cyan: #00E5FF;
+    -fo-magenta: #FF2A6D;
+    -fo-text-0: #EDEDE8;
+    -fo-text-1: #8C8C86;
+    -fo-text-2: #4A4A46;
+}
+
+.results-root {
+    -fx-background-color: -fo-bg-0;
+}
+
+.label {
+    -fx-font-family: "Consolas";
+    -fx-text-fill: -fo-text-0;
+}
+
+.results-panel {
+    -fx-background-color: rgba(10, 11, 12, 0.94);
+    -fx-border-color: -fo-line-strong;
+    -fx-border-width: 2;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-padding: 40 48 36 48;
+    -fx-max-width: 720;
+}
+
+.results-eyebrow {
+    -fx-font-size: 11px;
+    -fx-text-fill: -fo-magenta;
+}
+
+.results-title {
+    -fx-font-family: "Arial Narrow", "Arial";
+    -fx-font-weight: 800;
+    -fx-font-style: italic;
+    -fx-font-size: 62px;
+}
+.results-title.victory { -fx-text-fill: -fo-cyan; }
+.results-title.defeat  { -fx-text-fill: -fo-magenta; }
+
+.results-detail {
+    -fx-font-size: 15px;
+    -fx-text-fill: -fo-text-0;
+}
+
+.results-hint {
+    -fx-font-size: 12px;
+    -fx-text-fill: -fo-text-2;
+}
+
+.results-rule {
+    -fx-min-height: 4;
+    -fx-max-height: 4;
+    -fx-min-width: 96;
+    -fx-max-width: 96;
+}
+.results-rule.victory { -fx-background-color: -fo-cyan; }
+.results-rule.defeat  { -fx-background-color: -fo-magenta; }
+
+.results-button {
+    -fx-background-color: rgba(255, 255, 255, 0.02);
+    -fx-border-color: -fo-line-strong -fo-line-strong -fo-line-strong -fo-orange;
+    -fx-border-width: 2 2 2 4;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-padding: 10 20 10 20;
+    -fx-text-fill: -fo-text-0;
+    -fx-font-family: "Segoe UI";
+    -fx-font-size: 13px;
+    -fx-cursor: hand;
+}
+.results-button:hover {
+    -fx-background-color: rgba(255, 255, 255, 0.06);
+    -fx-border-color: -fo-orange;
+}

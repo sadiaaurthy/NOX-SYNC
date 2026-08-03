@@ -9,6 +9,7 @@ import java.util.Random;
 import javafx.animation.AnimationTimer;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
+import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
@@ -21,6 +22,7 @@ import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 
+import io.github.fableops.ResultsScreen;
 import io.github.fableops.lwjgl3.Lwjgl3Launcher;
 
 public class LauncherController {
@@ -151,11 +153,21 @@ public class LauncherController {
     }
 
     private void launchGame(String mode, String ip) {
+        // Keep the JavaFX toolkit alive after this window closes, otherwise JavaFX tears
+        // itself down with its last window and the results screen could never be shown.
+        Platform.setImplicitExit(false);
+        ResultsScreen.setPresenter(new ResultsWindow());
+
         Stage stage = (Stage) root.getScene().getWindow();
         stage.close();
-        // Runs on a plain (non-daemon) thread so the JVM stays alive after the JavaFX
-        // platform shuts down when its last window closes.
-        new Thread(() -> Lwjgl3Launcher.launch(mode, ip), "fableops-game").start();
+        // Runs on a plain (non-daemon) thread so the JVM stays alive alongside the
+        // now-idle JavaFX Application Thread.
+        new Thread(() -> {
+            Lwjgl3Launcher.launch(mode, ip);
+            // The LibGDX window has closed for good — let JavaFX exit too, or the JVM
+            // would hang on the still-running toolkit thread.
+            Platform.exit();
+        }, "fableops-game").start();
     }
 
     private static final class Star {

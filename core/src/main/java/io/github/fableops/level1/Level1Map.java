@@ -36,6 +36,10 @@ public class Level1Map implements Collidable {
     // both gates are open (see gateP1Open / gateP2Open).
     private final Rectangle centerChamber;
     private final Rectangle exitGateZone;
+    // One pressure plate per player, on the wired consoles either side of the reactor.
+    private final Rectangle pressurePlateP1;
+    private final Rectangle pressurePlateP2;
+    private boolean exitGateOpen = false;
 
     private final Rectangle gateP1;
     private final Rectangle gateP2;
@@ -47,6 +51,8 @@ public class Level1Map implements Collidable {
     // keeps players inside the building's actual footprint instead of the whole
     // rectangular world border (which includes plenty of black void the art never draws).
     private final List<Rectangle> allTracedFloor = new ArrayList<>();
+    /** Scratch box for collides(), see the note there. Not thread-safe by design. */
+    private final Rectangle collisionProbe = new Rectangle();
 
     public Level1Map() {
         background = new Texture(Gdx.files.internal("Level1Map.png"));
@@ -76,8 +82,16 @@ public class Level1Map implements Collidable {
         gateP2 = mirrorX(gateP1);
 
         // --- Shared center reactor chamber ---
-        centerChamber = imageRectToWorld(700, 2050, 1200, 1530);
+        // Traced to the octagon's actual interior. The previous rect (700..2050) reached
+        // into both purple side-rooms' walls, and its top edge overlapped the gates by
+        // only 60px — less than the player's 100px box, so nobody could walk in from a
+        // gate, and standing centred on a plate was impossible.
+        centerChamber = imageRectToWorld(920, 1850, 1120, 1470);
         exitGateZone = imageRectToWorld(1280, 1470, 1470, 1536);
+
+        // The two wired consoles flanking the reactor, used as the pressure plates.
+        pressurePlateP1 = imageRectToWorld(1078, 1248, 1190, 1280);
+        pressurePlateP2 = imageRectToWorld(1552, 1722, 1190, 1280);
 
         allTracedFloor.addAll(floorP1);
         allTracedFloor.addAll(floorP2);
@@ -90,6 +104,15 @@ public class Level1Map implements Collidable {
         {
             return exitGateZone;
         }
+
+    public Rectangle getPressurePlateP1() { return pressurePlateP1; }
+
+    public Rectangle getPressurePlateP2() { return pressurePlateP2; }
+
+    /** Called once both players are stood on their plates at the same time. */
+    public void openExitGate() { exitGateOpen = true; }
+
+    public boolean isExitGateOpen() { return exitGateOpen; }
 
     private void addFloorRect(List<Rectangle> list, float x1, float x2, float yTop, float yBottom) {
         list.add(imageRectToWorld(x1, x2, yTop, yBottom));
@@ -122,7 +145,11 @@ public class Level1Map implements Collidable {
 
     @Override
     public boolean collides(float x, float y, float w, float h, int playerSide) {
-        Rectangle box = new Rectangle(x, y, w, h);
+        // Reused instead of allocating: collides() runs twice per axis for every player
+        // and every enemy, so with a full swarm this was churning through thousands of
+        // throwaway Rectangles per second. Safe to share — all callers are on the single
+        // render thread.
+        Rectangle box = collisionProbe.set(x, y, w, h);
 
         if (!INTERNAL_WALLS_ENABLED) {
             for (Rectangle r : allTracedFloor) if (r.contains(box)) return false;
@@ -185,6 +212,33 @@ public class Level1Map implements Collidable {
         shape.setColor(0f, 0.9f, 1f, 0.85f);
         for (float[] spot : getTerminalSpotsP1()) drawTerminalMarker(shape, spot);
         for (float[] spot : getTerminalSpotsP2()) drawTerminalMarker(shape, spot);
+        shape.end();
+    }
+
+    /**
+     * Draws both pressure plates, lit up while a player is stood on one. Without this
+     * they're just background art with no indication they're interactive.
+     */
+    public void renderPressurePlates(ShapeRenderer shape, OrthographicCamera camera,
+                                     boolean p1Standing, boolean p2Standing) {
+        shape.setProjectionMatrix(camera.combined);
+
+        shape.begin(ShapeRenderer.ShapeType.Filled);
+        shape.setColor(0f, 0.9f, 1f, p1Standing ? 0.45f : 0.18f);
+        shape.rect(pressurePlateP1.x, pressurePlateP1.y, pressurePlateP1.width, pressurePlateP1.height);
+        shape.setColor(1f, 0.16f, 0.43f, p2Standing ? 0.45f : 0.18f);
+        shape.rect(pressurePlateP2.x, pressurePlateP2.y, pressurePlateP2.width, pressurePlateP2.height);
+        shape.end();
+
+        shape.begin(ShapeRenderer.ShapeType.Line);
+        shape.setColor(0f, 0.9f, 1f, 1f);
+        shape.rect(pressurePlateP1.x, pressurePlateP1.y, pressurePlateP1.width, pressurePlateP1.height);
+        shape.setColor(1f, 0.16f, 0.43f, 1f);
+        shape.rect(pressurePlateP2.x, pressurePlateP2.y, pressurePlateP2.width, pressurePlateP2.height);
+        if (exitGateOpen) {
+            shape.setColor(0.2f, 1f, 0.4f, 1f);
+            shape.rect(exitGateZone.x, exitGateZone.y, exitGateZone.width, exitGateZone.height);
+        }
         shape.end();
     }
 

@@ -6,17 +6,22 @@ import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
+import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
-import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.Rectangle;
+import com.badlogic.gdx.utils.Align;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import io.github.fableops.Enemy;
+import io.github.fableops.EnemySprites;
+import io.github.fableops.LobbyScreen;
+import io.github.fableops.Main;
 import io.github.fableops.Player;
+import io.github.fableops.ResultsScreen;
 import io.github.fableops.SwarmController;
 import io.github.fableops.level1.controller.Level1Controller;
 import io.github.fableops.level1.controller.Level1Listener;
@@ -54,6 +59,7 @@ public class Level1Screen implements Screen {
     private Player player2;
     private Level1Map world;
 
+    private final Main game;
     private final GameServer server;
     private final GameClient client;
     private final HostSession hostSession;
@@ -81,8 +87,17 @@ public class Level1Screen implements Screen {
     private volatile boolean reactorUnlocked = false;
     private boolean nearTerminal = false; // drives the "Press E to interact" prompt
     private boolean debugCollisionVisible = false; // F1 toggles collision rectangle overlay
-    private boolean level1Complete = false; // set true when both players reach the exit gate
+    private boolean level1Complete = false; // set true when both players hold their plates
     private BitmapFont bannerFont;
+    private BitmapFont subFont; // eyebrow / body / hint text on the end-of-level panels
+
+    // Shared with the launcher's palette (launcher.css) so both screens read as one game.
+    private static final Color COLOR_PANEL_BG     = new Color(0.04f, 0.043f, 0.047f, 0.97f);
+    private static final Color COLOR_PANEL_BORDER = new Color(0.29f, 0.24f, 0.18f, 1f);
+    private static final Color COLOR_MAGENTA      = new Color(1f, 0.16f, 0.43f, 1f);
+    private static final Color COLOR_CYAN         = new Color(0f, 0.90f, 1f, 1f);
+    private static final Color COLOR_TEXT         = new Color(0.93f, 0.93f, 0.91f, 1f);
+    private static final Color COLOR_DIM          = new Color(0.45f, 0.45f, 0.42f, 1f);
     private final SwarmController swarmController = new SwarmController();
     // Client-only mirror of the host's swarm — the client never simulates enemies
     // itself, it just renders whatever ENEMY_STATE last reported.
@@ -90,8 +105,20 @@ public class Level1Screen implements Screen {
     private final List<float[]> remoteEnemiesP2 = new ArrayList<>();
     private boolean missionFailed = false;
     private String missionFailedReason = "";
-    private static final float ATTACK_RANGE = 70f;
+    private boolean returnedToMenu = false; // guards returnToMainMenu() against running twice
+    private boolean disposed = false;       // guards dispose() against running twice
+    // Recomputed every frame so the plate glow and the completion check agree.
+    private boolean plateP1Held = false;
+    private boolean plateP2Held = false;
+    private final Rectangle plateProbe = new Rectangle(); // reused, avoids per-frame garbage
+    private boolean resultsShown = false;          // result handed over exactly once
+    private boolean resultsHandledExternally = false; // true = JavaFX window took it
+    private static final float ATTACK_RANGE = 120f;
     private static final int ATTACK_DAMAGE = 15;
+    private static final float ATTACK_COOLDOWN = 0.35f; // seconds between swings
+    private float attackCooldownP1 = 0f;
+    private float attackCooldownP2 = 0f;
+    private EnemySprites enemySprites;
     private static final int CONTACT_DAMAGE = 10;
 
     private static final int DIVIDER = 4;
@@ -99,7 +126,8 @@ public class Level1Screen implements Screen {
     private static final float CAM_H = 720f; // 1.5x zoom (1080 / 1.5)
     private static final float INTERACT_RANGE = 80f;
 
-    public Level1Screen(GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession) {
+    public Level1Screen(Main game, GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession) {
+        this.game = game;
         this.server  = server;
         this.client  = client;
         this.hostSession = hostSession;
@@ -110,8 +138,17 @@ public class Level1Screen implements Screen {
         batch = new SpriteBatch();
         shape = new ShapeRenderer();
         font = new BitmapFont();
-        bannerFont=new BitmapFont();
-        bannerFont.getData().setScale(3f);
+        bannerFont = new BitmapFont();
+        bannerFont.getData().setScale(2.2f);
+        subFont = new BitmapFont();
+        subFont.getData().setScale(1.25f);
+        // The built-in font is a small bitmap; upscaling it with the default Nearest
+        // filter is what made the end-of-level text look blocky. Linear filtering plus
+        // sub-pixel positioning smooths it. A truly crisp result needs a real TTF via
+        // gdx-freetype, which isn't a dependency here.
+        smoothFont(bannerFont);
+        smoothFont(subFont);
+        smoothFont(font);
         // Back-buffer size, not getWidth()/getHeight() — those are logical points and
         // diverge from the physical pixels glViewport() needs whenever the display has
         // OS-level scaling (125%/150% etc.), which was leaving stale content on screen.
@@ -120,6 +157,7 @@ public class Level1Screen implements Screen {
         uiCamera.update();
 
         world = new Level1Map();
+        enemySprites = new EnemySprites();
 
         float[] spawnP1 = world.getSpawnP1();
         float[] spawnP2 = world.getSpawnP2();
@@ -140,7 +178,7 @@ public class Level1Screen implements Screen {
             new Color(0.38f, 0.18f, 0.65f, 1f),
             new Color(0.90f, 0.25f, 0.85f, 1f),
             Input.Keys.UP,   Input.Keys.DOWN,
-            Input.Keys.LEFT, Input.Keys.L,
+            Input.Keys.LEFT, Input.Keys.RIGHT,
             world, CAM_W, CAM_H, 2
         );
 
@@ -148,6 +186,11 @@ public class Level1Screen implements Screen {
         // brawlspritesheet.png takes the remaining slot for P1.
         player1.setTexture("brawlspritesheet.png");
         player2.setTexture("hackerspritesheet.png");
+
+        // L also moves P2 right, alongside the right arrow. Only has any effect in Debug
+        // mode, since that's the only mode where P2 reads this keyboard (host polls arrow
+        // keys directly, and a joined client drives P2 over the network with WASD).
+        player2.setAlternateRightKey(Input.Keys.L);
 
         if (isHost && hostSession != null) {
             setupHostPuzzle();
@@ -169,12 +212,30 @@ public class Level1Screen implements Screen {
         popupP2.close();
     }
 
+    /**
+     * The single path back to the main menu from Level 1 — currently only reached via
+     * ESC during mission failure. Only ever called from render(), so it always runs on
+     * the libGDX render/application thread already; no Gdx.app.postRunnable needed.
+     * Guarded so a second trigger in the same or a later frame can't set a screen twice
+     * or double-dispose this one.
+     */
+    private void returnToMainMenu() {
+        if (returnedToMenu) return;
+        returnedToMenu = true;
+        popupP1.close();
+        popupP2.close();
+        game.setScreen(new LobbyScreen(game));
+        dispose();
+    }
+
     private void setupHostPuzzle() {
         Level1Listener listener = new Level1Listener() {
             @Override
             public void onLocalView(CodeFragmentPayload payload) {
                 myStageView = payload;
-                if (popupP1.isOpen()) popupP1.updatePayload(payload);
+                // Close rather than swap contents in place: each stage lives at its own
+                // terminal, so clearing the popup is what forces the walk to the next one.
+                popupP1.close();
             }
 
             @Override
@@ -196,6 +257,10 @@ public class Level1Screen implements Screen {
 
             public void onWrongAnswer(int offendingPlayerId)
             {
+                // Any wrong answer — whichever side caused it — closes the host's own
+                // terminal too, not just the offending player's. Host only ever owns
+                // popupP1, so this is unconditional rather than keyed on offendingPlayerId.
+                popupP1.close();
                 float x=  (offendingPlayerId == 1) ? player1.x : player2.x;
                 float y=  (offendingPlayerId == 1) ? player1.y : player2.y;
                 swarmController.spawnWave(offendingPlayerId, x, y, world);
@@ -222,7 +287,11 @@ public class Level1Screen implements Screen {
                 swarmController.reset();
                 player1.health = Player.MAX_HEALTH;
                 player2.health = Player.MAX_HEALTH;
+                player1.resetVisualState();
+                player2.resetVisualState();
                 missionFailed = false;
+                resultsShown = false;
+                resultsHandledExternally = false;
                 missionFailedReason = "";
                 float[] spawnP1 = world.getSpawnP1();
                 float[] spawnP2 = world.getSpawnP2();
@@ -243,7 +312,7 @@ public class Level1Screen implements Screen {
                 case "CODE_FRAGMENT":
                     CodeFragmentPayload payload = CodeFragmentPayload.deserialize(body);
                     myStageView = payload;
-                    if (popupP2.isOpen()) popupP2.updatePayload(payload);
+                    popupP2.close(); // new stage = new terminal, see host listener
                     break;
                 case "ALERT_METER_UPDATE":
                     alertMeterValue = AlertMeterUpdateMessage.deserialize(body).getValue();
@@ -270,11 +339,21 @@ public class Level1Screen implements Screen {
                     remoteEnemiesP2.clear();
                     player1.health = Player.MAX_HEALTH;
                     player2.health = Player.MAX_HEALTH;
+                    player1.resetVisualState();
+                    player2.resetVisualState();
                     missionFailed = false;
+                    resultsShown = false;
+                    resultsHandledExternally = false;
                     missionFailedReason = "";
                     break;
                 case "DIGIT_ACCEPTED":
                     // no extra feedback yet
+                    break;
+                case "WRONG_ANSWER":
+                    // UI sync only — close regardless of which side offended. The client
+                    // never spawns its own wave; the host is the sole enemy authority and
+                    // already queued the wave via its own ENEMY_STATE-driven simulation.
+                    popupP2.close();
                     break;
                 default:
                     break;
@@ -290,13 +369,13 @@ public class Level1Screen implements Screen {
             @Override
             public void onLocalView(CodeFragmentPayload payload) {
                 debugP1View = payload;
-                if (popupP1.isOpen()) popupP1.updatePayload(payload);
+                popupP1.close(); // new stage = new terminal, see host listener
             }
 
             @Override
             public void onRemoteView(CodeFragmentPayload payload) {
                 debugP2View = payload;
-                if (popupP2.isOpen()) popupP2.updatePayload(payload);
+                popupP2.close(); // new stage = new terminal, see host listener
             }
 
             @Override
@@ -311,6 +390,10 @@ public class Level1Screen implements Screen {
 
             @Override
             public void onWrongAnswer(int offendingPlayerId) {
+                // Debug drives both terminals from one keyboard/process — a wrong answer
+                // on either side closes both popups in the same frame.
+                popupP1.close();
+                popupP2.close();
                 float x = (offendingPlayerId == 1) ? player1.x : player2.x;
                 float y = (offendingPlayerId == 1) ? player1.y : player2.y;
                 swarmController.spawnWave(offendingPlayerId, x, y, world);
@@ -337,7 +420,11 @@ public class Level1Screen implements Screen {
                 swarmController.reset();
                 player1.health = Player.MAX_HEALTH;
                 player2.health = Player.MAX_HEALTH;
+                player1.resetVisualState();
+                player2.resetVisualState();
                 missionFailed = false;
+                resultsShown = false;
+                resultsHandledExternally = false;
                 missionFailedReason = "";
                 float[] spawnP1 = world.getSpawnP1();
                 float[] spawnP2 = world.getSpawnP2();
@@ -357,16 +444,40 @@ public class Level1Screen implements Screen {
     @Override
     public void render(float delta) {
         boolean anyPopupOpen = popupP1.isOpen() || popupP2.isOpen();
-        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !anyPopupOpen) Gdx.app.exit();
+
+        // Mission-failure input takes priority over every other top-of-frame key check.
+        // ESC always leaves for the main menu here — never Gdx.app.exit() — and stops
+        // this frame immediately since the screen is being torn down. ENTER only
+        // restarts from whichever side actually owns the puzzle/enemy state; a joined
+        // LAN client gets no ENTER handling at all here — it has no authoritative
+        // restart and only ever reacts to the host's own LEVEL_RESTART message (see
+        // setupClientPuzzle()). The !anyPopupOpen guard is defensive: triggerMissionFailed()
+        // already force-closes both popups, so the two states can't actually overlap, but
+        // this keeps "ESC closes an open terminal, never the menu" true unconditionally.
+        if (missionFailed) {
+            if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !anyPopupOpen) {
+                returnToMainMenu();
+                return;
+            }
+            if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
+                if (isHost) controller.restartLevel1();
+                else if (isDebug) debugController.restartLevel1();
+            }
+        } else if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !anyPopupOpen) {
+            Gdx.app.exit();
+        }
         if (Gdx.input.isKeyJustPressed(Input.Keys.F1)) debugCollisionVisible = !debugCollisionVisible;
 
-        // Only the host/debug side actually owns the puzzle state, so only they can
-        // acknowledge the banner and trigger a real restart; a joined client just waits
-        // for the resulting LEVEL_RESTART message.
-        if (missionFailed && Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
-            if (isHost) controller.restartLevel1();
-            else if (isDebug) debugController.restartLevel1();
+        // K = skip the current stage. Debug mode only; there's no controller to drive it
+        // on a joined client, and it would desync a real host/client match.
+        if (isDebug && !missionFailed && Gdx.input.isKeyJustPressed(Input.Keys.K)) {
+            debugController.skipCurrentStage();
         }
+
+        // Visual-only timers (attack lunge, hurt flash) — always ticking, regardless of
+        // mode, popup state, or mission failure, so an in-flight effect always finishes.
+        player1.updateVisualState(delta);
+        player2.updateVisualState(delta);
 
         if (isDebug) {
             updateAsDebug(delta);
@@ -377,10 +488,37 @@ public class Level1Screen implements Screen {
         }
 
         handlePuzzleInteraction();
+        plateP1Held = isOnOwnPlate(player1, world.getPressurePlateP1());
+        plateP2Held = isOnOwnPlate(player2, world.getPressurePlateP2());
         checkLevel1Complete();
+        presentResultsOnce();
         updateSwarm(delta);
         drawWorld();
         drawUI();
+    }
+
+    /**
+     * Turns a held attack key into one swing per cooldown. Host-authoritative: only the
+     * host/debug side actually resolves hits, a joined client just reports the keypress.
+     * Without this the swarm had no counterplay at all — attackNearest() existed but was
+     * never called, so a single wrong digit meant taking contact damage until death.
+     */
+    private void resolveAttacks(float delta, boolean p1Attacking, boolean p2Attacking) {
+        attackCooldownP1 = Math.max(0f, attackCooldownP1 - delta);
+        attackCooldownP2 = Math.max(0f, attackCooldownP2 - delta);
+
+        if (p1Attacking && attackCooldownP1 <= 0f) {
+            player1.triggerAttackVisual();
+            swarmController.attackNearest(1, player1.x + Player.SIZE / 2f, player1.y + Player.SIZE / 2f,
+                ATTACK_RANGE, ATTACK_DAMAGE);
+            attackCooldownP1 = ATTACK_COOLDOWN;
+        }
+        if (p2Attacking && attackCooldownP2 <= 0f) {
+            player2.triggerAttackVisual();
+            swarmController.attackNearest(2, player2.x + Player.SIZE / 2f, player2.y + Player.SIZE / 2f,
+                ATTACK_RANGE, ATTACK_DAMAGE);
+            attackCooldownP2 = ATTACK_COOLDOWN;
+        }
     }
 
     // Host and Debug simulate the swarm locally (host-authoritative); a joined client
@@ -416,26 +554,57 @@ public class Level1Screen implements Screen {
         return positions;
     }
 
+    /**
+     * Hands a successful completion to the launcher's JavaFX results window, once, same
+     * as before. Mission failure never does this — it always uses the in-game MISSION
+     * FAILED panel, since ESC/ENTER navigation and restart authority live entirely in
+     * this screen's own input handling, which the JavaFX window (Dismiss-only) can't
+     * drive. If nothing is registered for a victory (game started without the launcher)
+     * this reports false and the in-game panel is drawn instead, same as before.
+     */
+    private void presentResultsOnce() {
+        if (resultsShown) return;
+        if (!missionFailed && !level1Complete) return;
+        resultsShown = true;
+        if (missionFailed) {
+            resultsHandledExternally = false;
+            return;
+        }
+        resultsHandledExternally = ResultsScreen.show(true, "Both plates held. The exit gate is open.");
+    }
+
+    private static void smoothFont(BitmapFont f) {
+        f.getRegion().getTexture().setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+        f.setUseIntegerPositions(false);
+    }
+
+    /** True while that player is stood on their own pressure plate beside the reactor. */
+    private boolean isOnOwnPlate(Player player, Rectangle plate) {
+        return plate.overlaps(plateProbe.set(player.x, player.y, Player.SIZE, Player.SIZE));
+    }
+
     private void checkLevel1Complete()
     {
         if(level1Complete) return; // already completed, no need to check again
-        Rectangle exitZone= world.getExitGateZone();
-        Rectangle p1Box= new Rectangle(player1.x, player1.y, Player.SIZE, Player.SIZE);
-        Rectangle p2Box= new Rectangle(player2.x, player2.y, Player.SIZE, Player.SIZE);
-        if(exitZone.overlaps(p1Box) && exitZone.overlaps(p2Box))
-        {
-            level1Complete=true;
+        // Both players holding their own plate at the same time opens the exit gate and
+        // ends the level. Replaces the old "both stand in the exit doorway" check, which
+        // sat on the gate itself and so was never actually reachable.
+        if (plateP1Held && plateP2Held) {
+            world.openExitGate();
+            level1Complete = true;
         }
     }
 
     // D mode — no network, both players local on one window
     private void updateAsDebug(float delta) {
-        if (!popupP1.isOpen() && !missionFailed) {
-            player1.update(delta); // WASD
-        }
-        if (!popupP2.isOpen() && !missionFailed) {
-            player2.update(delta); // arrow keys
-        }
+        boolean p1Free = !popupP1.isOpen() && !missionFailed;
+        boolean p2Free = !popupP2.isOpen() && !missionFailed;
+        if (p1Free) player1.update(delta); // WASD
+        if (p2Free) player2.update(delta); // arrow keys
+
+        resolveAttacks(delta,
+            p1Free && Gdx.input.isKeyPressed(Input.Keys.F),
+            p2Free && Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT));
     }
 
     private void updateAsHost(float delta) {
@@ -451,13 +620,18 @@ public class Level1Screen implements Screen {
                 Gdx.input.isKeyPressed(Input.Keys.UP),
                 Gdx.input.isKeyPressed(Input.Keys.DOWN),
                 Gdx.input.isKeyPressed(Input.Keys.LEFT),
-                Gdx.input.isKeyPressed(Input.Keys.RIGHT)
+                Gdx.input.isKeyPressed(Input.Keys.RIGHT),
+                Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT)
             );
         }
 
         if (!missionFailed) {
             player2.applyInput(p2Input, delta);
         }
+
+        resolveAttacks(delta,
+            !popupP1.isOpen() && !missionFailed && Gdx.input.isKeyPressed(Input.Keys.F),
+            !missionFailed && p2Input.attack);
 
         server.pushState(new WorldState(
             player1.x, player1.y,
@@ -473,7 +647,8 @@ public class Level1Screen implements Screen {
                 Gdx.input.isKeyPressed(Input.Keys.W),
                 Gdx.input.isKeyPressed(Input.Keys.S),
                 Gdx.input.isKeyPressed(Input.Keys.A),
-                Gdx.input.isKeyPressed(Input.Keys.D)
+                Gdx.input.isKeyPressed(Input.Keys.D),
+                Gdx.input.isKeyPressed(Input.Keys.F)
             );
         client.pushInput(myInput);
 
@@ -519,13 +694,37 @@ public class Level1Screen implements Screen {
         boolean p2Near = isNearStageTerminal(player2, world.getTerminalSpotsP2(), debugP2View);
         nearTerminal = (p1Near && !popupP1.isOpen()) || (p2Near && !popupP2.isOpen());
 
-        if (!popupP1.isOpen() && p1Near && debugP1View != null && Gdx.input.isKeyJustPressed(Input.Keys.E)) {
+        boolean ePressed = Gdx.input.isKeyJustPressed(Input.Keys.E);
+        boolean openedP1ThisFrame = false;
+        if (!popupP1.isOpen() && p1Near && debugP1View != null && ePressed) {
             popupP1.open(debugP1View, 1);
             debugFocusedPlayerId = 1;
+            openedP1ThisFrame = true;
         }
-        if (!popupP2.isOpen() && p2Near && debugP2View != null && Gdx.input.isKeyJustPressed(Input.Keys.E)) {
+        if (!popupP2.isOpen() && p2Near && debugP2View != null && ePressed) {
             popupP2.open(debugP2View, 2);
-            debugFocusedPlayerId = 2;
+            // Both players stand at mirrored terminals, so one E press usually opens both.
+            // Don't let the right terminal steal focus in that case — start on the left one
+            // so a single keypress lands somewhere predictable, then SPACE to swap.
+            if (!openedP1ThisFrame) debugFocusedPlayerId = 2;
+        }
+
+        // ESC closes only the focused terminal, not every open one — dismissing your own
+        // popup shouldn't wipe the other player's screen. Focus falls to whatever remains.
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+            if (popupP1.isOpen() && popupP2.isOpen()) {
+                if (debugFocusedPlayerId == 1) {
+                    popupP1.close();
+                    debugFocusedPlayerId = 2;
+                } else {
+                    popupP2.close();
+                    debugFocusedPlayerId = 1;
+                }
+            } else {
+                popupP1.close();
+                popupP2.close();
+            }
+            return;
         }
 
         boolean bothOpen = popupP1.isOpen() && popupP2.isOpen();
@@ -533,8 +732,13 @@ public class Level1Screen implements Screen {
             debugFocusedPlayerId = (debugFocusedPlayerId == 1) ? 2 : 1;
         }
 
-        if (popupP1.isOpen() && (!bothOpen || debugFocusedPlayerId == 1)) popupP1.handleInput();
-        if (popupP2.isOpen() && (!bothOpen || debugFocusedPlayerId == 2)) popupP2.handleInput();
+        // A popup that's the only one open always takes input, whatever the focus id says.
+        boolean p1Active = popupP1.isOpen() && (!bothOpen || debugFocusedPlayerId == 1);
+        boolean p2Active = popupP2.isOpen() && (!bothOpen || debugFocusedPlayerId == 2);
+        popupP1.setFocused(p1Active);
+        popupP2.setFocused(p2Active);
+        if (p1Active) popupP1.handleInput();
+        if (p2Active) popupP2.handleInput();
     }
 
     // Each of the 3 terminal spots is dedicated to one stage (matches the 3 physical
@@ -563,6 +767,7 @@ public class Level1Screen implements Screen {
         // left half — P1 camera
         Gdx.gl.glViewport(0, 0, half, screenH);
         world.render(batch, shape, player1.camera);
+        world.renderPressurePlates(shape, player1.camera, plateP1Held, plateP2Held);
         if (debugCollisionVisible) world.renderDebugCollision(shape, player1.camera);
         drawEnemies(player1.camera);
 
@@ -575,6 +780,7 @@ public class Level1Screen implements Screen {
         // right half — P2 camera
         Gdx.gl.glViewport(half + DIVIDER, 0, half, screenH);
         world.render(batch, shape, player2.camera);
+        world.renderPressurePlates(shape, player2.camera, plateP1Held, plateP2Held);
         if (debugCollisionVisible) world.renderDebugCollision(shape, player2.camera);
         drawEnemies(player2.camera);
 
@@ -588,17 +794,24 @@ public class Level1Screen implements Screen {
     }
 
     private void drawEnemies(OrthographicCamera camera) {
-        shape.setProjectionMatrix(camera.combined);
-        shape.begin(ShapeRenderer.ShapeType.Filled);
+        batch.setProjectionMatrix(camera.combined);
+        batch.begin();
         if (isHost || isDebug) {
-            for (Enemy e : swarmController.getEnemiesP1()) e.draw(shape);
-            for (Enemy e : swarmController.getEnemiesP2()) e.draw(shape);
+            for (Enemy e : swarmController.getEnemiesP1()) e.draw(batch, enemySprites);
+            for (Enemy e : swarmController.getEnemiesP2()) e.draw(batch, enemySprites);
         } else {
-            shape.setColor(Color.RED);
-            for (float[] pos : remoteEnemiesP1) shape.rect(pos[0], pos[1], Enemy.SIZE, Enemy.SIZE);
-            for (float[] pos : remoteEnemiesP2) shape.rect(pos[0], pos[1], Enemy.SIZE, Enemy.SIZE);
+            // The client only receives positions, not per-enemy animation state, so it
+            // renders a fixed frame rather than guessing a facing or death progress.
+            for (float[] pos : remoteEnemiesP1) drawRemoteEnemy(pos);
+            for (float[] pos : remoteEnemiesP2) drawRemoteEnemy(pos);
         }
-        shape.end();
+        batch.end();
+    }
+
+    private void drawRemoteEnemy(float[] pos) {
+        float draw = 120f;
+        float offset = (Enemy.SIZE - draw) / 2f;
+        batch.draw(enemySprites.walkFrame(0, 0f), pos[0] + offset, pos[1] + offset, draw, draw);
     }
 
     private void drawHealthBar(float x, float y, float health, Color color) {
@@ -632,7 +845,7 @@ public class Level1Screen implements Screen {
         }
         if (isDebug && popupP1.isOpen() && popupP2.isOpen()) {
             font.setColor(Color.ORANGE);
-            font.draw(batch, "SPACE — switch terminal (focus: player " + debugFocusedPlayerId + ")",
+            font.draw(batch, "SPACE = switch terminal   (typing into: player " + debugFocusedPlayerId + ")",
                 20, Gdx.graphics.getBackBufferHeight() - 95);
         }
         batch.end();
@@ -649,48 +862,82 @@ public class Level1Screen implements Screen {
         popupP1.render(shape, batch);
         popupP2.render(shape, batch);
 
-        if(level1Complete) drawLevelCompleteBanner();
-        if(missionFailed) drawMissionFailedBanner();
+        // Skipped when the JavaFX results window is showing the outcome instead.
+        if (!resultsHandledExternally) {
+            if (level1Complete) drawLevelCompleteBanner();
+            if (missionFailed) drawMissionFailedBanner();
+        }
     }
 
-    private void drawLevelCompleteBanner()
-    {
-        float screenW= Gdx.graphics.getBackBufferWidth();
-        float screenH= Gdx.graphics.getBackBufferHeight();
-
-        shape.begin(ShapeRenderer.ShapeType.Filled);
-        shape.setColor(0f, 0f, 0f, 0.75f);
-        shape.rect(0,0, screenW, screenH);
-        shape.end();
-
-        String msg="Level 1 Complete!\n\n" +
-                "Both players reached the exit gate.\n\n" +
-                "Press ESC to exit.";
-
-        GlyphLayout layout= new GlyphLayout(bannerFont, msg);
-        batch.begin();
-        bannerFont.setColor(Color.GREEN);
-        bannerFont.draw(batch, layout, (screenW-layout.width)/2f, (screenH+layout.height)/2f);
-        batch.end();
+    private void drawLevelCompleteBanner() {
+        drawBanner("// REACTOR SECURED", "LEVEL 1 COMPLETE", COLOR_CYAN,
+            "Both plates held. The exit gate is open.",
+            "Press ESC to exit.");
     }
 
-    private void drawMissionFailedBanner()
-    {
-        float screenW= Gdx.graphics.getBackBufferWidth();
-        float screenH= Gdx.graphics.getBackBufferHeight();
+    private void drawMissionFailedBanner() {
+        drawBanner("// CRITICAL FAILURE", "MISSION FAILED", COLOR_MAGENTA,
+            missionFailedReason,
+            (isHost || isDebug)
+                ? "ESC = Main Menu\nENTER = Restart Level"
+                : "ESC = Main Menu\nWaiting for host to restart...");
+    }
+
+    /**
+     * Shared end-of-level panel, styled to the launcher's language: dimmed backdrop, dark
+     * notched panel, magenta eyebrow, accent title, ASCII only (the default BitmapFont has
+     * no box-drawing or dash glyphs and renders them as empty squares).
+     */
+    private void drawBanner(String eyebrow, String title, Color titleColor, String body, String hint) {
+        float screenW = Gdx.graphics.getBackBufferWidth();
+        float screenH = Gdx.graphics.getBackBufferHeight();
+        float panelW = Math.min(760f, screenW * 0.6f);
+        float panelH = 320f;
+        float panelX = (screenW - panelW) / 2f;
+        float panelY = (screenH - panelH) / 2f;
+        float pad = 40f;
+        float notch = 18f;
 
         shape.begin(ShapeRenderer.ShapeType.Filled);
-        shape.setColor(0f, 0f, 0f, 0.75f);
-        shape.rect(0,0, screenW, screenH);
+        shape.setColor(0f, 0f, 0f, 0.82f);
+        shape.rect(0, 0, screenW, screenH);
+        shape.setColor(COLOR_PANEL_BG);
+        shape.rect(panelX, panelY + notch, panelW, panelH - 2 * notch);
+        shape.rect(panelX + notch, panelY, panelW - 2 * notch, panelH);
         shape.end();
 
-        String restartHint = (isHost || isDebug) ? "Press ENTER to restart." : "Waiting for host to restart...";
-        String msg = "Mission Failed!\n\n" + missionFailedReason + "\n\n" + restartHint;
+        shape.begin(ShapeRenderer.ShapeType.Line);
+        shape.setColor(COLOR_PANEL_BORDER);
+        shape.line(panelX, panelY + notch, panelX, panelY + panelH - notch);
+        shape.line(panelX, panelY + panelH - notch, panelX + notch, panelY + panelH);
+        shape.line(panelX + notch, panelY + panelH, panelX + panelW - notch, panelY + panelH);
+        shape.line(panelX + panelW - notch, panelY + panelH, panelX + panelW, panelY + panelH - notch);
+        shape.line(panelX + panelW, panelY + panelH - notch, panelX + panelW, panelY + notch);
+        shape.line(panelX + panelW, panelY + notch, panelX + panelW - notch, panelY);
+        shape.line(panelX + panelW - notch, panelY, panelX + notch, panelY);
+        shape.line(panelX + notch, panelY, panelX, panelY + notch);
+        shape.setColor(titleColor);
+        shape.line(panelX, panelY + panelH - notch, panelX + notch, panelY + panelH);
+        shape.line(panelX + panelW - notch, panelY, panelX + panelW, panelY + notch);
+        shape.end();
 
-        GlyphLayout layout= new GlyphLayout(bannerFont, msg);
+        float contentW = panelW - 2 * pad;
+        float lineY = panelY + panelH - pad;
+
         batch.begin();
-        bannerFont.setColor(Color.RED);
-        bannerFont.draw(batch, layout, (screenW-layout.width)/2f, (screenH+layout.height)/2f);
+        subFont.setColor(COLOR_MAGENTA);
+        subFont.draw(batch, eyebrow, panelX + pad, lineY, contentW, Align.left, true);
+        lineY -= 42;
+
+        bannerFont.setColor(titleColor);
+        bannerFont.draw(batch, title, panelX + pad, lineY, contentW, Align.left, false);
+        lineY -= 72;
+
+        subFont.setColor(COLOR_TEXT);
+        lineY -= subFont.draw(batch, body, panelX + pad, lineY, contentW, Align.left, true).height + 26;
+
+        subFont.setColor(COLOR_DIM);
+        subFont.draw(batch, hint, panelX + pad, lineY, contentW, Align.left, true);
         batch.end();
     }
 
@@ -710,6 +957,8 @@ public class Level1Screen implements Screen {
 
     @Override
     public void dispose() {
+        if (disposed) return;
+        disposed = true;
         batch.dispose();
         shape.dispose();
         font.dispose();
@@ -718,7 +967,9 @@ public class Level1Screen implements Screen {
         player1.dispose();
         player2.dispose();
         world.dispose();
+        enemySprites.dispose();
         bannerFont.dispose();
+        subFont.dispose();
         if (server != null) server.stop();
         if (client != null) client.stop();
         if (hostSession != null) hostSession.stop();

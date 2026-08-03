@@ -8,57 +8,48 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Stage 2 — Split Information and Conditional Ordering.
- * Player 1 sees 3 conditions (one per position) and enters all 3 values.
- * Player 2 sees the 3 raw values (unordered) and describes them out loud —
- * Player 2 never submits anything this stage, it's purely informational.
+ * Stage 2 — Symbol Translation Protocol.
+ * Player 1 sees the code as a sequence of symbols and enters the digits.
+ * Player 2 holds the legend saying what each symbol is worth, and never submits.
  *
- * Conditions are generated from 3 distinct sorted values (low/mid/high) so each
- * condition is unambiguous regardless of the actual numbers rolled:
- *   low  -> "less than mid"
- *   high -> "greater than mid"
- *   mid  -> "between low and high"
+ * The split is deliberately total: Player 1's screen contains no digits at all, and
+ * Player 2's legend is listed in a shuffled order that carries no positional meaning.
+ * Neither screen is solvable on its own, which is what the previous version got wrong —
+ * it spelled the comparison values out ("less than 7", "between 5 and 9"), so Player 1
+ * could read every number straight off their own screen and never had to ask.
  */
 public class Stage2Data extends StageData {
     private static final int POSITION_COUNT = 3;
+    // No "=" in the pool — the legend is rendered as "<symbol> = <digit>", so an "="
+    // symbol would print the unreadable "= = 4".
+    private static final String[] SYMBOL_POOL = {"@", "#", "$", "%", "&", "*", "+", "?"};
 
-    private final int low, mid, high;
-    private final String[] conditionText = new String[POSITION_COUNT];
-    private final List<Integer> valuesForPlayer2 = new ArrayList<>();
+    private final String[] symbolAtPosition = new String[POSITION_COUNT];
+    private final List<String> legendForPlayer2 = new ArrayList<>();
 
     public Stage2Data() {
         super(POSITION_COUNT);
         Random random = new Random();
 
-        List<Integer> values = new ArrayList<>();
-        while (values.size() < 3) {
-            int v = random.nextInt(10);
-            if (!values.contains(v)) values.add(v);
-        }
-        Collections.sort(values);
-        low = values.get(0);
-        mid = values.get(1);
-        high = values.get(2);
+        List<String> symbols = new ArrayList<>(List.of(SYMBOL_POOL));
+        Collections.shuffle(symbols);
 
-        List<Integer> assignment = new ArrayList<>(List.of(low, mid, high));
-        Collections.shuffle(assignment);
+        // Distinct digits, so no two symbols share a value and the legend stays unambiguous.
+        List<Integer> digits = new ArrayList<>();
+        while (digits.size() < POSITION_COUNT) {
+            int d = random.nextInt(10);
+            if (!digits.contains(d)) digits.add(d);
+        }
 
         for (int i = 0; i < POSITION_COUNT; i++) {
-            int value = assignment.get(i);
-            correctValues[i] = String.valueOf(value);
+            symbolAtPosition[i] = symbols.get(i);
+            correctValues[i] = String.valueOf(digits.get(i));
             ownerPlayerId[i] = 1; // only Player 1 submits this stage
-
-            if (value == low) {
-                conditionText[i] = "Value less than " + mid;
-            } else if (value == high) {
-                conditionText[i] = "Value greater than " + mid;
-            } else {
-                conditionText[i] = "Value between " + low + " and " + high;
-            }
+            legendForPlayer2.add(symbols.get(i) + " = " + digits.get(i));
         }
 
-        valuesForPlayer2.addAll(List.of(low, mid, high));
-        Collections.shuffle(valuesForPlayer2);
+        // Shuffled so the legend's order never hints at the code's order.
+        Collections.shuffle(legendForPlayer2);
     }
 
     @Override
@@ -67,13 +58,18 @@ public class Stage2Data extends StageData {
         List<Integer> ownedPositions = new ArrayList<>();
 
         if (playerId == 1) {
+            displayLines.add("Code reads:  " + String.join("  ", symbolAtPosition));
+            displayLines.add("Ask your partner what each symbol is worth.");
             for (int i = 0; i < totalPositions; i++) {
-                displayLines.add("Position " + i + ": " + conditionText[i]);
+                displayLines.add("Position " + i + " = symbol " + symbolAtPosition[i]);
                 ownedPositions.add(i);
             }
         } else {
-            displayLines.add("Available values: " + valuesForPlayer2);
-            displayLines.add("Describe them to your partner - you don't submit this stage.");
+            displayLines.add("Symbol legend:");
+            for (String entry : legendForPlayer2) {
+                displayLines.add("   " + entry);
+            }
+            displayLines.add("Read these out - you don't submit this stage.");
         }
 
         return new CodeFragmentPayload(2, displayLines, ownedPositions);

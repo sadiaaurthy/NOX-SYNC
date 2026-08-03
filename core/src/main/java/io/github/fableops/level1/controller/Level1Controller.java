@@ -1,5 +1,7 @@
 package io.github.fableops.level1.controller;
 
+import com.badlogic.gdx.Gdx;
+
 import io.github.fableops.level1.model.AlertMeter;
 import io.github.fableops.level1.model.StageData;
 import io.github.fableops.level1.network.AlertMeterUpdateMessage;
@@ -7,6 +9,7 @@ import io.github.fableops.level1.network.DigitAcceptedMessage;
 import io.github.fableops.level1.network.EnteredDigitMessage;
 import io.github.fableops.level1.network.LevelRestartMessage;
 import io.github.fableops.level1.network.ReactorUnlockMessage;
+import io.github.fableops.level1.network.WrongAnswerMessage;
 import io.github.fableops.network.session.HostSession;
 import io.github.fableops.network.session.MessageListener;
 
@@ -31,11 +34,19 @@ public class Level1Controller {
         this.listener = listener;
     }
 
-    /** Wire this into hostSession.setListener(...) to route incoming client messages here. */
+    /**
+     * Wire this into hostSession.setListener(...) to route incoming client messages here.
+     * dispatch() runs on HostSession's own network-reader thread, but every gameplay
+     * mutation below (puzzle state, AlertMeter, SwarmController) is host-authoritative and
+     * only ever safe on the libGDX render thread — the same thread update()/reset() already
+     * run on. Deserializing here is pure parsing with no shared state, so it stays outside
+     * the post; only the actual handling is marshaled over.
+     */
     public MessageListener asMessageListener() {
         return (type, body) -> {
             if ("ENTERED_DIGIT".equals(type)) {
-                handleEnteredDigit(EnteredDigitMessage.deserialize(body));
+                EnteredDigitMessage entered = EnteredDigitMessage.deserialize(body);
+                Gdx.app.postRunnable(() -> handleEnteredDigit(entered));
             }
         };
     }
@@ -83,11 +94,29 @@ public class Level1Controller {
             alertMeter.increase(WRONG_ANSWER_ALERT_INCREASE);
             listener.onAlertMeterChanged(alertMeter.getValue());
             if (hostSession != null) hostSession.send(new AlertMeterUpdateMessage(alertMeter.getValue()));
+            // UI-sync only: tells every peer to close whatever terminal popup is open.
+            // Never used by the client to spawn enemies — SwarmController stays host/debug-only.
+            if (hostSession != null) hostSession.send(new WrongAnswerMessage(message.getPlayerId()));
             listener.onWrongAnswer(message.getPlayerId());
 
             if (alertMeter.isMax()) {
                 listener.onMissionFailed();
             }
+        }
+    }
+
+    /**
+     * Debug shortcut: marks the current stage solved and moves on, exactly as if every
+     * position had been entered correctly. Deliberately routed through the same
+     * advance/unlock path as a real solve so it can't drift from normal progression.
+     */
+    public void skipCurrentStage() {
+        if (stageNumber == 3) {
+            alertMeter.reset();
+            listener.onReactorUnlocked();
+            if (hostSession != null) hostSession.send(new ReactorUnlockMessage());
+        } else {
+            enterStage(stageNumber + 1);
         }
     }
 
