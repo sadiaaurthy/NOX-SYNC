@@ -235,6 +235,10 @@ public class Level1Screen implements Screen {
 
             public void onWrongAnswer(int offendingPlayerId)
             {
+                // Any wrong answer — whichever side caused it — closes the host's own
+                // terminal too, not just the offending player's. Host only ever owns
+                // popupP1, so this is unconditional rather than keyed on offendingPlayerId.
+                popupP1.close();
                 float x=  (offendingPlayerId == 1) ? player1.x : player2.x;
                 float y=  (offendingPlayerId == 1) ? player1.y : player2.y;
                 swarmController.spawnWave(offendingPlayerId, x, y, world);
@@ -319,6 +323,12 @@ public class Level1Screen implements Screen {
                 case "DIGIT_ACCEPTED":
                     // no extra feedback yet
                     break;
+                case "WRONG_ANSWER":
+                    // UI sync only — close regardless of which side offended. The client
+                    // never spawns its own wave; the host is the sole enemy authority and
+                    // already queued the wave via its own ENEMY_STATE-driven simulation.
+                    popupP2.close();
+                    break;
                 default:
                     break;
             }
@@ -354,6 +364,10 @@ public class Level1Screen implements Screen {
 
             @Override
             public void onWrongAnswer(int offendingPlayerId) {
+                // Debug drives both terminals from one keyboard/process — a wrong answer
+                // on either side closes both popups in the same frame.
+                popupP1.close();
+                popupP2.close();
                 float x = (offendingPlayerId == 1) ? player1.x : player2.x;
                 float y = (offendingPlayerId == 1) ? player1.y : player2.y;
                 swarmController.spawnWave(offendingPlayerId, x, y, world);

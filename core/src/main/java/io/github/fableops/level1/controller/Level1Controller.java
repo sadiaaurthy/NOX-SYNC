@@ -7,6 +7,7 @@ import io.github.fableops.level1.network.DigitAcceptedMessage;
 import io.github.fableops.level1.network.EnteredDigitMessage;
 import io.github.fableops.level1.network.LevelRestartMessage;
 import io.github.fableops.level1.network.ReactorUnlockMessage;
+import io.github.fableops.level1.network.WrongAnswerMessage;
 import io.github.fableops.network.session.HostSession;
 import io.github.fableops.network.session.MessageListener;
 
@@ -83,6 +84,9 @@ public class Level1Controller {
             alertMeter.increase(WRONG_ANSWER_ALERT_INCREASE);
             listener.onAlertMeterChanged(alertMeter.getValue());
             if (hostSession != null) hostSession.send(new AlertMeterUpdateMessage(alertMeter.getValue()));
+            // UI-sync only: tells every peer to close whatever terminal popup is open.
+            // Never used by the client to spawn enemies — SwarmController stays host/debug-only.
+            if (hostSession != null) hostSession.send(new WrongAnswerMessage(message.getPlayerId()));
             listener.onWrongAnswer(message.getPlayerId());
 
             if (alertMeter.isMax()) {
