@@ -18,6 +18,8 @@ import java.util.List;
 
 import io.github.fableops.Enemy;
 import io.github.fableops.EnemySprites;
+import io.github.fableops.LobbyScreen;
+import io.github.fableops.Main;
 import io.github.fableops.Player;
 import io.github.fableops.ResultsScreen;
 import io.github.fableops.SwarmController;
@@ -57,6 +59,7 @@ public class Level1Screen implements Screen {
     private Player player2;
     private Level1Map world;
 
+    private final Main game;
     private final GameServer server;
     private final GameClient client;
     private final HostSession hostSession;
@@ -102,6 +105,8 @@ public class Level1Screen implements Screen {
     private final List<float[]> remoteEnemiesP2 = new ArrayList<>();
     private boolean missionFailed = false;
     private String missionFailedReason = "";
+    private boolean returnedToMenu = false; // guards returnToMainMenu() against running twice
+    private boolean disposed = false;       // guards dispose() against running twice
     // Recomputed every frame so the plate glow and the completion check agree.
     private boolean plateP1Held = false;
     private boolean plateP2Held = false;
@@ -121,7 +126,8 @@ public class Level1Screen implements Screen {
     private static final float CAM_H = 720f; // 1.5x zoom (1080 / 1.5)
     private static final float INTERACT_RANGE = 80f;
 
-    public Level1Screen(GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession) {
+    public Level1Screen(Main game, GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession) {
+        this.game = game;
         this.server  = server;
         this.client  = client;
         this.hostSession = hostSession;
@@ -204,6 +210,22 @@ public class Level1Screen implements Screen {
         missionFailedReason = reason;
         popupP1.close();
         popupP2.close();
+    }
+
+    /**
+     * The single path back to the main menu from Level 1 — currently only reached via
+     * ESC during mission failure. Only ever called from render(), so it always runs on
+     * the libGDX render/application thread already; no Gdx.app.postRunnable needed.
+     * Guarded so a second trigger in the same or a later frame can't set a screen twice
+     * or double-dispose this one.
+     */
+    private void returnToMainMenu() {
+        if (returnedToMenu) return;
+        returnedToMenu = true;
+        popupP1.close();
+        popupP2.close();
+        game.setScreen(new LobbyScreen(game));
+        dispose();
     }
 
     private void setupHostPuzzle() {
@@ -416,21 +438,34 @@ public class Level1Screen implements Screen {
     @Override
     public void render(float delta) {
         boolean anyPopupOpen = popupP1.isOpen() || popupP2.isOpen();
-        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !anyPopupOpen) Gdx.app.exit();
+
+        // Mission-failure input takes priority over every other top-of-frame key check.
+        // ESC always leaves for the main menu here — never Gdx.app.exit() — and stops
+        // this frame immediately since the screen is being torn down. ENTER only
+        // restarts from whichever side actually owns the puzzle/enemy state; a joined
+        // LAN client gets no ENTER handling at all here — it has no authoritative
+        // restart and only ever reacts to the host's own LEVEL_RESTART message (see
+        // setupClientPuzzle()). The !anyPopupOpen guard is defensive: triggerMissionFailed()
+        // already force-closes both popups, so the two states can't actually overlap, but
+        // this keeps "ESC closes an open terminal, never the menu" true unconditionally.
+        if (missionFailed) {
+            if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !anyPopupOpen) {
+                returnToMainMenu();
+                return;
+            }
+            if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
+                if (isHost) controller.restartLevel1();
+                else if (isDebug) debugController.restartLevel1();
+            }
+        } else if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !anyPopupOpen) {
+            Gdx.app.exit();
+        }
         if (Gdx.input.isKeyJustPressed(Input.Keys.F1)) debugCollisionVisible = !debugCollisionVisible;
 
         // K = skip the current stage. Debug mode only; there's no controller to drive it
         // on a joined client, and it would desync a real host/client match.
         if (isDebug && !missionFailed && Gdx.input.isKeyJustPressed(Input.Keys.K)) {
             debugController.skipCurrentStage();
-        }
-
-        // Only the host/debug side actually owns the puzzle state, so only they can
-        // acknowledge the banner and trigger a real restart; a joined client just waits
-        // for the resulting LEVEL_RESTART message.
-        if (missionFailed && Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
-            if (isHost) controller.restartLevel1();
-            else if (isDebug) debugController.restartLevel1();
         }
 
         if (isDebug) {
@@ -507,17 +542,22 @@ public class Level1Screen implements Screen {
     }
 
     /**
-     * Hands the end-of-level result to the launcher's JavaFX results window, once.
-     * If nothing is registered (game started without the launcher, so no JavaFX toolkit
-     * is running) this reports false and the in-game panel is drawn instead.
+     * Hands a successful completion to the launcher's JavaFX results window, once, same
+     * as before. Mission failure never does this — it always uses the in-game MISSION
+     * FAILED panel, since ESC/ENTER navigation and restart authority live entirely in
+     * this screen's own input handling, which the JavaFX window (Dismiss-only) can't
+     * drive. If nothing is registered for a victory (game started without the launcher)
+     * this reports false and the in-game panel is drawn instead, same as before.
      */
     private void presentResultsOnce() {
         if (resultsShown) return;
         if (!missionFailed && !level1Complete) return;
         resultsShown = true;
-        resultsHandledExternally = ResultsScreen.show(
-            level1Complete,
-            level1Complete ? "Both plates held. The exit gate is open." : missionFailedReason);
+        if (missionFailed) {
+            resultsHandledExternally = false;
+            return;
+        }
+        resultsHandledExternally = ResultsScreen.show(true, "Both plates held. The exit gate is open.");
     }
 
     private static void smoothFont(BitmapFont f) {
@@ -825,7 +865,9 @@ public class Level1Screen implements Screen {
     private void drawMissionFailedBanner() {
         drawBanner("// CRITICAL FAILURE", "MISSION FAILED", COLOR_MAGENTA,
             missionFailedReason,
-            (isHost || isDebug) ? "Press ENTER to restart." : "Waiting for host to restart...");
+            (isHost || isDebug)
+                ? "ESC = Main Menu\nENTER = Restart Level"
+                : "ESC = Main Menu\nWaiting for host to restart...");
     }
 
     /**
@@ -902,6 +944,8 @@ public class Level1Screen implements Screen {
 
     @Override
     public void dispose() {
+        if (disposed) return;
+        disposed = true;
         batch.dispose();
         shape.dispose();
         font.dispose();

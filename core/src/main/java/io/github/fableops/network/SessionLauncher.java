@@ -1,10 +1,10 @@
 package io.github.fableops.network;
 
-import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 
 import java.util.function.Consumer;
 
+import io.github.fableops.Main;
 import io.github.fableops.level1.Level1Screen;
 import io.github.fableops.network.session.ClientSession;
 import io.github.fableops.network.session.HostSession;
@@ -13,10 +13,15 @@ import io.github.fableops.network.session.HostSession;
  * Starts a host/join/debug session and hands the game off to Level1Screen once ready.
  * Shared by LobbyScreen (in-game H/J/L/D menu) and the JavaFX launcher, so both entry
  * points drive the exact same connection logic.
+ *
+ * Takes Main rather than the generic libGDX Game: every current caller (Main.create()
+ * itself, and LobbyScreen's own `game` field) already holds a Main instance, and
+ * Level1Screen needs that concrete type to be able to navigate back to LobbyScreen
+ * (new LobbyScreen(game)) on mission-failure ESC without an unsafe cast.
  */
 public class SessionLauncher {
 
-    public static void host(Game game, Consumer<String> onFailure) {
+    public static void host(Main game, Consumer<String> onFailure) {
         GameServer server = new GameServer();
         HostSession hostSession = new HostSession();
         new Thread(() -> {
@@ -24,7 +29,7 @@ public class SessionLauncher {
                 server.start();
                 hostSession.start();
                 Gdx.app.postRunnable(() ->
-                    game.setScreen(new Level1Screen(server, null, hostSession, null))
+                    game.setScreen(new Level1Screen(game, server, null, hostSession, null))
                 );
             } catch (Exception e) {
                 if (onFailure != null) {
@@ -34,7 +39,7 @@ public class SessionLauncher {
         }).start();
     }
 
-    public static void join(Game game, String ip, Runnable onFailure) {
+    public static void join(Main game, String ip, Runnable onFailure) {
         GameClient client = new GameClient();
         ClientSession clientSession = new ClientSession();
         new Thread(() -> {
@@ -42,7 +47,7 @@ public class SessionLauncher {
                 client.connect(ip);
                 clientSession.connect(ip);
                 Gdx.app.postRunnable(() ->
-                    game.setScreen(new Level1Screen(null, client, null, clientSession))
+                    game.setScreen(new Level1Screen(game, null, client, null, clientSession))
                 );
             } catch (Exception e) {
                 if (onFailure != null) Gdx.app.postRunnable(onFailure);
@@ -50,7 +55,7 @@ public class SessionLauncher {
         }).start();
     }
 
-    public static void debug(Game game) {
-        game.setScreen(new Level1Screen(null, null, null, null));
+    public static void debug(Main game) {
+        game.setScreen(new Level1Screen(game, null, null, null, null));
     }
 }
