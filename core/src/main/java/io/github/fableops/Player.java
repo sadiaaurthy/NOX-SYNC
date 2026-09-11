@@ -35,7 +35,32 @@ public class Player {
     private static final float DEAD_ALPHA = 0.65f;
 
     public float x, y;
+    /** Size of the sprite cell — the drawn height, and the box x/y are measured against. */
     public static final float SIZE = 100f;
+
+    /**
+     * The physical collider, which is deliberately smaller than the drawn sprite.
+     *
+     * SIZE was previously used as both the draw size and the collision box, which made
+     * the player a 100x100 square. Measuring the sheets says that is simply wrong: across
+     * all 32 frames of both characters the widest pose is 63.0 units
+     * (brawlspritesheet, facing left) and hackerspritesheet peaks at 59.4 — so the old box
+     * was 59% wider than the art it was standing in for. That phantom width is what made
+     * the map's ~80-unit doorways impassable despite looking wide enough on screen.
+     *
+     * COLLIDER is square for the same reason Enemy is (SIZE 70 against DRAW_SIZE 120):
+     * this is a top-down map, so what collides is the character's footprint on the floor,
+     * not the full standing silhouette. A 92-unit-tall collider matching the body outline
+     * would mean a character's head blocked them from walking down a corridor, which is
+     * not how the level is drawn. 64 covers the widest pose exactly.
+     *
+     * Anchored at the bottom of the sprite and centred horizontally, so it sits on the
+     * feet — the sheets leave only 4-12 units of empty space below them.
+     */
+    public static final float COLLIDER = 64f;
+    private static final float COLLIDER_OFFSET_X = (SIZE - COLLIDER) / 2f;
+    private static final float COLLIDER_OFFSET_Y = 0f;
+
     private static final float SPEED = 220f;
     public static final float MAX_HEALTH = 100f;
     public float health = MAX_HEALTH;
@@ -63,8 +88,11 @@ public class Player {
     public OrthographicCamera camera;
     private Collidable world;
 
-    private final float camW;
-    private final float camH;
+    // Not final: the screen owning this player re-derives them from the real viewport
+    // whenever the window resizes — see setCameraViewport(). They are also the clamp
+    // bounds in updateCamera(), so the two must always be changed together.
+    private float camW;
+    private float camH;
     private final int side; // 1 = P1's own floor/gate, 2 = P2's — which side this player collides against
 
     // full constructor — used for keyboard-controlled players (default zoom, side=1)
@@ -114,6 +142,16 @@ public class Player {
                   Collidable world) {
         this(startX, startY, bodyColor, accentColor,
              -1, -1, -1, -1, world, 960f, 1080f, 1);
+    }
+
+    /**
+     * Restores health, capped at MAX_HEALTH. There is deliberately no passive regeneration
+     * anywhere in the game — this is only ever reached by consuming an item, so a player
+     * who runs out of health packs stays hurt until the level restarts.
+     */
+    public void heal(float amount) {
+        if (amount <= 0f || health <= 0f) return; // the dead don't drink medkits
+        health = Math.min(MAX_HEALTH, health + amount);
     }
 
     public void takeDamage(float amount) {
@@ -288,11 +326,45 @@ public class Player {
 
         stateTime = isMoving ? stateTime + delta : 0f;
 
-        if (!world.collides(x + dx, y, SIZE, SIZE, side)) x += dx;
-        if (!world.collides(x, y + dy, SIZE, SIZE, side)) y += dy;
+        // Each axis is tested separately so a blocked X still allows the Y step (wall
+        // sliding). Tested against the collider, not the sprite box — see COLLIDER.
+        if (!world.collides(colliderX(x + dx), colliderY(y), COLLIDER, COLLIDER, side)) x += dx;
+        if (!world.collides(colliderX(x), colliderY(y + dy), COLLIDER, COLLIDER, side)) y += dy;
 
         updateCamera();
     }
+
+    /**
+     * Resizes this player's view of the world, in world units.
+     *
+     * The constructor's camW/camH were authored against a 1920x1080 window, where each
+     * split-screen half is 958x1080 and so happens to match 640x720's aspect ratio almost
+     * exactly. On any other shape of display it does not: a 4:3 projector gives each half
+     * a 510x768 viewport, and mapping a 640x720 world rect onto that squashes everything
+     * 25% horizontally. The owning screen calls this with the real viewport's aspect so
+     * the world is never distorted, whatever the display.
+     */
+    public void setCameraViewport(float camW, float camH) {
+        this.camW = camW;
+        this.camH = camH;
+        camera.viewportWidth = camW;
+        camera.viewportHeight = camH;
+        updateCamera(); // re-clamp: the clamp bounds are derived from camW/camH
+    }
+
+    /**
+     * The collider's bottom-left corner for a given sprite-box position. Public so that
+     * everything physical — movement, contact damage, standing on a pressure plate —
+     * tests the same box, rather than some using the collider and others the sprite.
+     */
+    public static float colliderX(float spriteX) { return spriteX + COLLIDER_OFFSET_X; }
+
+    public static float colliderY(float spriteY) { return spriteY + COLLIDER_OFFSET_Y; }
+
+    /** Centre of the collider — the reference point for range checks. */
+    public float centreX() { return x + SIZE / 2f; }
+
+    public float centreY() { return colliderY(y) + COLLIDER / 2f; }
 
     // updates camera to follow this player — call after any position change
     public void updateCamera() {
@@ -378,6 +450,19 @@ public class Player {
         batch.draw(frame, drawX + offsetX, drawY + offsetY, drawW / 2f, drawH / 2f, drawW, drawH,
             scale, scale, rotation);
         batch.setColor(1f, 1f, 1f, 1f); // restore — never leave the next draw call tinted/faded
+    }
+
+    /**
+     * The front-facing idle pose, for the inventory portrait. Frame 0 of the DOWN row is
+     * the same frame the character holds while standing still, so the portrait matches
+     * what the player sees of themselves on the map. Null before setTexture() has run.
+     *
+     * The sheet's texture keeps LibGDX's default Nearest filter, so drawing this large
+     * stays pixel-art crisp instead of blurring.
+     */
+    public TextureRegion portraitFrame() {
+        if (walkAnimations == null) return null;
+        return walkAnimations[Direction.DOWN.ordinal()].getKeyFrames()[0];
     }
 
     public void dispose() {

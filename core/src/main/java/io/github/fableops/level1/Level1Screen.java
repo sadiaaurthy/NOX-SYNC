@@ -23,6 +23,7 @@ import io.github.fableops.Main;
 import io.github.fableops.Player;
 import io.github.fableops.ResultsScreen;
 import io.github.fableops.SwarmController;
+import io.github.fableops.inventory.PlayerInventories;
 import io.github.fableops.level1.controller.Level1Controller;
 import io.github.fableops.level1.controller.Level1Listener;
 import io.github.fableops.level1.model.AlertMeter;
@@ -70,6 +71,10 @@ public class Level1Screen implements Screen {
     private Level1Controller controller; // host only
     private Level1Controller debugController; // debug only — same class, hostSession=null
 
+    // Both players' inventories and panels. Shared with Level 2 rather than reimplemented
+    // there — only the items placed in them differ between levels.
+    private final PlayerInventories inventories = new PlayerInventories();
+
     // Two independent popups, always. Host only ever opens popupP1 (host IS player 1
     // locally); client only ever opens popupP2 (client IS player 2 locally). Debug mode
     // is the one case both can be open at once, since a single person is driving both
@@ -103,6 +108,11 @@ public class Level1Screen implements Screen {
     // itself, it just renders whatever ENEMY_STATE last reported.
     private final List<float[]> remoteEnemiesP1 = new ArrayList<>();
     private final List<float[]> remoteEnemiesP2 = new ArrayList<>();
+    // Host-side snapshot rate, independent of frame rate — see updateSwarm().
+    private static final float ENEMY_STATE_INTERVAL = 1f / 20f;
+    private float enemyStateTimer = 0f;
+    private final List<float[]> positionBufferP1 = new ArrayList<>();
+    private final List<float[]> positionBufferP2 = new ArrayList<>();
     private boolean missionFailed = false;
     private String missionFailedReason = "";
     private boolean returnedToMenu = false; // guards returnToMainMenu() against running twice
@@ -126,6 +136,49 @@ public class Level1Screen implements Screen {
     private static final float CAM_H = 720f; // 1.5x zoom (1080 / 1.5)
     private static final float INTERACT_RANGE = 80f;
 
+    /**
+     * The HUD, the terminal popups and the end-of-level banners are authored in a fixed
+     * 1920x1080 virtual space, never in raw back-buffer pixels. Every UI size below —
+     * padding, panel dimensions, font scales, row spacing — is in those virtual units.
+     *
+     * This is what makes the interface resolution- and DPI-independent. Previously the
+     * UI camera was the back buffer itself, so panels sized as a fraction of the screen
+     * grew with it while the text inside them stayed an absolute pixel count: on a 4K
+     * display that meant a huge panel holding unreadably small text, and on a 1366x768
+     * laptop the same text was proportionally oversized and overran its panel. Anchoring
+     * the whole layer to one reference resolution makes text a constant fraction of
+     * screen height everywhere, whatever the OS scaling factor is set to.
+     *
+     * Same idea as LobbyScreen's 1536x960 design space, but scaled-and-extended rather
+     * than fitted: a FitViewport would letterbox, and these black bars would pull the UI
+     * halves out of alignment with the split-screen world halves drawn under them.
+     */
+    private static final float UI_REF_W = 1920f;
+    private static final float UI_REF_H = 1080f;
+    /** Current virtual size — UI_REF on a 16:9 display, taller/wider on other aspects. */
+    private float uiWorldW = UI_REF_W;
+    private float uiWorldH = UI_REF_H;
+
+    /**
+     * Presentation aid: multiplies the whole UI layer's size. 1.0 is the normal
+     * desk-monitor size and the default, so this changes nothing unless asked for.
+     * A projector is usually both low-resolution and viewed from across a room, where
+     * text sized for a monitor at arm's length is too small to read from the back row;
+     * F2 cycles these live so it can be adjusted against the actual wall during setup.
+     * Only the UI scales — the world cameras are untouched, so gameplay is unaffected.
+     */
+    private static final float[] UI_SCALE_STEPS = {1f, 1.25f, 1.5f};
+    private int uiScaleStep = 0;
+
+    // HUD metrics, all in virtual units. Row spacing is derived from one step rather
+    // than the old hand-written -20/-45/-70/-95/-115 ladder, so changing the font scale
+    // can't leave the rows overlapping.
+    private static final float HUD_FONT_SCALE = 1.4f;
+    private static final float HUD_MARGIN = 26f;
+    private static final float HUD_LINE_STEP = 34f;
+    private static final float HUD_BAR_W = 220f;
+    private static final float HUD_BAR_H = 22f;
+
     public Level1Screen(Main game, GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession) {
         this.game = game;
         this.server  = server;
@@ -137,11 +190,15 @@ public class Level1Screen implements Screen {
 
         batch = new SpriteBatch();
         shape = new ShapeRenderer();
+        // Font scales are in UI_REF virtual units: the default BitmapFont is ~15px tall,
+        // so 1.4 is ~21 virtual px of a 1080-unit-tall space — a constant share of screen
+        // height on every display rather than a fixed pixel count on some of them.
         font = new BitmapFont();
+        font.getData().setScale(HUD_FONT_SCALE);
         bannerFont = new BitmapFont();
-        bannerFont.getData().setScale(2.2f);
+        bannerFont.getData().setScale(3.0f);
         subFont = new BitmapFont();
-        subFont.getData().setScale(1.25f);
+        subFont.getData().setScale(1.6f);
         // The built-in font is a small bitmap; upscaling it with the default Nearest
         // filter is what made the end-of-level text look blocky. Linear filtering plus
         // sub-pixel positioning smooths it. A truly crisp result needs a real TTF via
@@ -149,12 +206,8 @@ public class Level1Screen implements Screen {
         smoothFont(bannerFont);
         smoothFont(subFont);
         smoothFont(font);
-        // Back-buffer size, not getWidth()/getHeight() — those are logical points and
-        // diverge from the physical pixels glViewport() needs whenever the display has
-        // OS-level scaling (125%/150% etc.), which was leaving stale content on screen.
-        uiCamera = new OrthographicCamera(Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
-        uiCamera.position.set(Gdx.graphics.getBackBufferWidth() / 2f, Gdx.graphics.getBackBufferHeight() / 2f, 0);
-        uiCamera.update();
+        uiCamera = new OrthographicCamera();
+        updateUiCamera();
 
         world = new Level1Map();
         enemySprites = new EnemySprites();
@@ -191,6 +244,10 @@ public class Level1Screen implements Screen {
         // mode, since that's the only mode where P2 reads this keyboard (host polls arrow
         // keys directly, and a joined client drives P2 over the network with WASD).
         player2.setAlternateRightKey(Input.Keys.L);
+
+        // Both players exist now, so the cameras can be matched to the real window shape.
+        updateWorldCameras();
+
 
         if (isHost && hostSession != null) {
             setupHostPuzzle();
@@ -270,7 +327,7 @@ public class Level1Screen implements Screen {
             @Override
             public void onReactorUnlocked() {
                 reactorUnlocked = true;
-                world.openGates();
+                world.unlockReactor();
             }
 
             @Override
@@ -320,7 +377,7 @@ public class Level1Screen implements Screen {
                     break;
                 case "REACTOR_UNLOCK":
                     reactorUnlocked = true;
-                    world.openGates();
+                    world.unlockReactor();
                     break;
                 case "ENEMY_STATE":
                     EnemyStateMessage enemyState = EnemyStateMessage.deserialize(body);
@@ -402,7 +459,7 @@ public class Level1Screen implements Screen {
             @Override
             public void onReactorUnlocked() {
                 reactorUnlocked = true;
-                world.openGates();
+                world.unlockReactor();
             }
 
             @Override
@@ -443,7 +500,11 @@ public class Level1Screen implements Screen {
 
     @Override
     public void render(float delta) {
-        boolean anyPopupOpen = popupP1.isOpen() || popupP2.isOpen();
+        // Any on-screen panel that owns ESC for itself. Both the terminal popups and the
+        // inventories close on ESC, and both are handled further down this method — so
+        // without counting them here, ESC would quit the game (or leave for the menu)
+        // before the open panel ever saw the key.
+        boolean uiPanelOpen = popupP1.isOpen() || popupP2.isOpen() || inventories.anyOpen();
 
         // Mission-failure input takes priority over every other top-of-frame key check.
         // ESC always leaves for the main menu here — never Gdx.app.exit() — and stops
@@ -451,11 +512,11 @@ public class Level1Screen implements Screen {
         // restarts from whichever side actually owns the puzzle/enemy state; a joined
         // LAN client gets no ENTER handling at all here — it has no authoritative
         // restart and only ever reacts to the host's own LEVEL_RESTART message (see
-        // setupClientPuzzle()). The !anyPopupOpen guard is defensive: triggerMissionFailed()
+        // setupClientPuzzle()). The !uiPanelOpen guard is defensive: triggerMissionFailed()
         // already force-closes both popups, so the two states can't actually overlap, but
         // this keeps "ESC closes an open terminal, never the menu" true unconditionally.
         if (missionFailed) {
-            if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !anyPopupOpen) {
+            if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !uiPanelOpen) {
                 returnToMainMenu();
                 return;
             }
@@ -463,16 +524,26 @@ public class Level1Screen implements Screen {
                 if (isHost) controller.restartLevel1();
                 else if (isDebug) debugController.restartLevel1();
             }
-        } else if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !anyPopupOpen) {
+        } else if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !uiPanelOpen) {
             Gdx.app.exit();
         }
         if (Gdx.input.isKeyJustPressed(Input.Keys.F1)) debugCollisionVisible = !debugCollisionVisible;
+
+        // F2 = cycle UI size, for projector setup. Deliberately outside the missionFailed
+        // and popup guards above: the banners and the terminal popups are exactly the text
+        // most likely to need resizing, so it has to work while they are on screen.
+        if (Gdx.input.isKeyJustPressed(Input.Keys.F2)) {
+            uiScaleStep = (uiScaleStep + 1) % UI_SCALE_STEPS.length;
+            updateUiCamera();
+        }
 
         // K = skip the current stage. Debug mode only; there's no controller to drive it
         // on a joined client, and it would desync a real host/client match.
         if (isDebug && !missionFailed && Gdx.input.isKeyJustPressed(Input.Keys.K)) {
             debugController.skipCurrentStage();
         }
+
+        handleInventoryInput();
 
         // Visual-only timers (attack lunge, hurt flash) — always ticking, regardless of
         // mode, popup state, or mission failure, so an in-flight effect always finishes.
@@ -509,13 +580,13 @@ public class Level1Screen implements Screen {
 
         if (p1Attacking && attackCooldownP1 <= 0f) {
             player1.triggerAttackVisual();
-            swarmController.attackNearest(1, player1.x + Player.SIZE / 2f, player1.y + Player.SIZE / 2f,
+            swarmController.attackNearest(1, player1.centreX(), player1.centreY(),
                 ATTACK_RANGE, ATTACK_DAMAGE);
             attackCooldownP1 = ATTACK_COOLDOWN;
         }
         if (p2Attacking && attackCooldownP2 <= 0f) {
             player2.triggerAttackVisual();
-            swarmController.attackNearest(2, player2.x + Player.SIZE / 2f, player2.y + Player.SIZE / 2f,
+            swarmController.attackNearest(2, player2.centreX(), player2.centreY(),
                 ATTACK_RANGE, ATTACK_DAMAGE);
             attackCooldownP2 = ATTACK_COOLDOWN;
         }
@@ -528,30 +599,49 @@ public class Level1Screen implements Screen {
             swarmController.update(delta, player1, player2, world);
 
             // Contact damage-per-second while touching, not per-frame, so it's framerate independent.
-            if (swarmController.isTouchingAny(1, player1.x, player1.y, Player.SIZE, Player.SIZE)) {
+            // Collider, not the sprite box — a 100x100 player box overlapped enemies a
+            // third of a body away, and it has to agree with what movement collides with.
+            if (swarmController.isTouchingAny(1, Player.colliderX(player1.x), Player.colliderY(player1.y),
+                Player.COLLIDER, Player.COLLIDER)) {
                 player1.takeDamage(CONTACT_DAMAGE * delta);
             }
-            if (swarmController.isTouchingAny(2, player2.x, player2.y, Player.SIZE, Player.SIZE)) {
+            if (swarmController.isTouchingAny(2, Player.colliderX(player2.x), Player.colliderY(player2.y),
+                Player.COLLIDER, Player.COLLIDER)) {
                 player2.takeDamage(CONTACT_DAMAGE * delta);
             }
             if (player1.health <= 0 || player2.health <= 0) {
                 triggerMissionFailed("A player was eliminated!");
             }
         }
+        // Enemy state used to be serialized and pushed every rendered frame. At 60fps with
+        // a full swarm that was ~60 string-built packets per second plus a fresh List and
+        // a float[] per enemy each time — pure garbage for data the client only redraws.
+        // Decoupled the same way Minecraft separates its 20 TPS simulation from render:
+        // simulation still runs every frame, the network snapshot goes out at a fixed
+        // rate. Movement rides its own channel and is unaffected.
         if (isHost && hostSession != null) {
-            hostSession.send(new EnemyStateMessage(
-                toPositions(swarmController.getEnemiesP1()),
-                toPositions(swarmController.getEnemiesP2()),
-                player1.health,
-                player2.health
-            ));
+            enemyStateTimer += delta;
+            if (enemyStateTimer >= ENEMY_STATE_INTERVAL) {
+                enemyStateTimer = 0f;
+                hostSession.send(new EnemyStateMessage(
+                    toPositions(swarmController.getEnemiesP1(), positionBufferP1),
+                    toPositions(swarmController.getEnemiesP2(), positionBufferP2),
+                    player1.health,
+                    player2.health
+                ));
+            }
         }
     }
 
-    private List<float[]> toPositions(List<Enemy> enemies) {
-        List<float[]> positions = new ArrayList<>(enemies.size());
-        for (Enemy e : enemies) positions.add(new float[]{e.x, e.y});
-        return positions;
+    /**
+     * Fills a reused buffer rather than allocating a new List and a float[] per enemy.
+     * The message is serialized to a string synchronously inside send(), so the buffer is
+     * fully consumed before the next call can touch it.
+     */
+    private List<float[]> toPositions(List<Enemy> enemies, List<float[]> buffer) {
+        buffer.clear();
+        for (Enemy e : enemies) buffer.add(e.getPosition());
+        return buffer;
     }
 
     /**
@@ -573,6 +663,55 @@ public class Level1Screen implements Screen {
         resultsHandledExternally = ResultsScreen.show(true, "Both plates held. The exit gate is open.");
     }
 
+    /**
+     * Re-derives the virtual UI space from the current back-buffer size.
+     *
+     * Back-buffer size, not getWidth()/getHeight(): those are logical points and diverge
+     * from the physical pixels glViewport() works in whenever the display has OS-level
+     * scaling (125%/150% etc.). Reading the physical size here is what makes the UI track
+     * the real window rather than a stale logical one.
+     *
+     * The scale is the tighter of the two axes against the reference, so the aspect ratio
+     * is always preserved — text is never stretched. The looser axis simply gets more
+     * virtual units than the reference, which is why uiWorldW/uiWorldH are read per frame
+     * instead of assuming 1920x1080: on a 16:10 or ultrawide display the UI fills the
+     * window with extra space rather than distorting or letterboxing.
+     *
+     * Done by hand rather than with ExtendViewport because Viewport.apply() routes through
+     * HdpiUtils, which would convert logical to physical a second time on top of the
+     * back-buffer values this screen deliberately works in.
+     */
+    /**
+     * Re-derives both world cameras from the real split-screen viewport.
+     *
+     * CAM_W/CAM_H describe a 1920x1080 window, where each half is 958x1080 — almost
+     * exactly 640x720's aspect. Nothing else matches: a 4:3 projector's half viewport is
+     * 510x768, and drawing a 640x720 world rect into it squashes the world 25%
+     * horizontally. Holding the vertical extent at CAM_H and solving the width from the
+     * viewport's own aspect keeps the zoom level identical to today on a 16:9 display
+     * while removing the distortion everywhere else; a narrower display simply shows less
+     * width rather than a deformed picture.
+     */
+    private void updateWorldCameras() {
+        float bbW = Gdx.graphics.getBackBufferWidth();
+        float bbH = Gdx.graphics.getBackBufferHeight();
+        if (bbW <= 0f || bbH <= 0f) return; // minimised window — keep the last good size
+        float halfW = (bbW - DIVIDER) / 2f;
+        float camW = CAM_H * (halfW / bbH);
+        player1.setCameraViewport(camW, CAM_H);
+        player2.setCameraViewport(camW, CAM_H);
+    }
+
+    private void updateUiCamera() {
+        float bbW = Gdx.graphics.getBackBufferWidth();
+        float bbH = Gdx.graphics.getBackBufferHeight();
+        if (bbW <= 0f || bbH <= 0f) return; // minimised window — keep the last good size
+        float scale = UI_SCALE_STEPS[uiScaleStep] * Math.min(bbW / UI_REF_W, bbH / UI_REF_H);
+        uiWorldW = bbW / scale;
+        uiWorldH = bbH / scale;
+        uiCamera.setToOrtho(false, uiWorldW, uiWorldH);
+    }
+
     private static void smoothFont(BitmapFont f) {
         f.getRegion().getTexture().setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
         f.setUseIntegerPositions(false);
@@ -580,7 +719,9 @@ public class Level1Screen implements Screen {
 
     /** True while that player is stood on their own pressure plate beside the reactor. */
     private boolean isOnOwnPlate(Player player, Rectangle plate) {
-        return plate.overlaps(plateProbe.set(player.x, player.y, Player.SIZE, Player.SIZE));
+        // Standing on a plate is a footprint question, so it uses the collider too.
+        return plate.overlaps(plateProbe.set(Player.colliderX(player.x), Player.colliderY(player.y),
+            Player.COLLIDER, Player.COLLIDER));
     }
 
     private void checkLevel1Complete()
@@ -597,8 +738,10 @@ public class Level1Screen implements Screen {
 
     // D mode — no network, both players local on one window
     private void updateAsDebug(float delta) {
-        boolean p1Free = !popupP1.isOpen() && !missionFailed;
-        boolean p2Free = !popupP2.isOpen() && !missionFailed;
+        // An open inventory freezes only its own player — the world and the partner keep
+        // running, same rule the terminal popups already use.
+        boolean p1Free = !popupP1.isOpen() && !inventories.isOpen(1) && !missionFailed;
+        boolean p2Free = !popupP2.isOpen() && !inventories.isOpen(2) && !missionFailed;
         if (p1Free) player1.update(delta); // WASD
         if (p2Free) player2.update(delta); // arrow keys
 
@@ -608,7 +751,7 @@ public class Level1Screen implements Screen {
     }
 
     private void updateAsHost(float delta) {
-        if (!popupP1.isOpen() && !missionFailed) {
+        if (!popupP1.isOpen() && !inventories.isOpen(1) && !missionFailed) {
             player1.update(delta);
         }
 
@@ -630,7 +773,8 @@ public class Level1Screen implements Screen {
         }
 
         resolveAttacks(delta,
-            !popupP1.isOpen() && !missionFailed && Gdx.input.isKeyPressed(Input.Keys.F),
+            !popupP1.isOpen() && !inventories.isOpen(1) && !missionFailed
+                && Gdx.input.isKeyPressed(Input.Keys.F),
             !missionFailed && p2Input.attack);
 
         server.pushState(new WorldState(
@@ -641,7 +785,7 @@ public class Level1Screen implements Screen {
 
     private void updateAsClient(float delta) {
         // Client is a separate physical device — no keyboard conflict, so WASD like P1.
-        PlayerInput myInput = (popupP2.isOpen() || missionFailed)
+        PlayerInput myInput = (popupP2.isOpen() || inventories.isOpen(2) || missionFailed)
             ? new PlayerInput(false, false, false, false)
             : new PlayerInput(
                 Gdx.input.isKeyPressed(Input.Keys.W),
@@ -663,6 +807,27 @@ public class Level1Screen implements Screen {
         player2.updateCamera();
     }
 
+    /**
+     * Opens, closes and drives each player's inventory.
+     *
+     * A player may only open their own: the host is Player 1 locally and the client is
+     * Player 2, so each listens for its own number key. Debug mode drives both players
+     * from one keyboard, so there both keys are live.
+     *
+     * Guarded on the terminal popups because CodePopupUI reads NUM_1 and NUM_2 as puzzle
+     * digits — without this, typing "1" into a terminal would also throw the inventory
+     * open behind it. Mission failure blocks it too: that screen owns ESC and ENTER, and a
+     * panel over the top would eat both.
+     */
+    private void handleInventoryInput() {
+        // Blocked on the terminal popups because CodePopupUI reads NUM_1 and NUM_2 as
+        // puzzle digits — without this, typing "1" into a terminal would also throw the
+        // inventory open behind it. Mission failure blocks it too: that screen owns ESC
+        // and ENTER, and a panel over the top would eat both.
+        boolean blocked = missionFailed || popupP1.isOpen() || popupP2.isOpen();
+        inventories.handleInput(isHost || isDebug, !isHost || isDebug, blocked, player1, player2);
+    }
+
     private void handlePuzzleInteraction() {
         if (isDebug) {
             handleDebugPuzzleInteraction();
@@ -676,7 +841,7 @@ public class Level1Screen implements Screen {
         }
 
         Player localPlayer = isHost ? player1 : player2;
-        float[][] terminals = isHost ? world.getTerminalSpotsP1() : world.getTerminalSpotsP2();
+        List<Rectangle> terminals = isHost ? world.getTerminalZonesP1() : world.getTerminalZonesP2();
 
         nearTerminal = isNearStageTerminal(localPlayer, terminals, myStageView);
         if (nearTerminal && Gdx.input.isKeyJustPressed(Input.Keys.E)) {
@@ -690,8 +855,8 @@ public class Level1Screen implements Screen {
     // are open — every other key stays reserved for whichever popup is focused, so
     // typing a digit never leaks into the other terminal's input.
     private void handleDebugPuzzleInteraction() {
-        boolean p1Near = isNearStageTerminal(player1, world.getTerminalSpotsP1(), debugP1View);
-        boolean p2Near = isNearStageTerminal(player2, world.getTerminalSpotsP2(), debugP2View);
+        boolean p1Near = isNearStageTerminal(player1, world.getTerminalZonesP1(), debugP1View);
+        boolean p2Near = isNearStageTerminal(player2, world.getTerminalZonesP2(), debugP2View);
         nearTerminal = (p1Near && !popupP1.isOpen()) || (p2Near && !popupP2.isOpen());
 
         boolean ePressed = Gdx.input.isKeyJustPressed(Input.Keys.E);
@@ -745,15 +910,19 @@ public class Level1Screen implements Screen {
     // console panels drawn in the art) — being near terminal 0 only ever opens Stage 1,
     // terminal 1 only Stage 2, terminal 2 only Stage 3, instead of any terminal working
     // for whichever stage happens to be active.
-    private boolean isNearStageTerminal(Player player, float[][] terminals, CodeFragmentPayload view) {
+    private boolean isNearStageTerminal(Player player, List<Rectangle> terminals, CodeFragmentPayload view) {
         if (view == null) return false;
         int index = view.getStageNumber() - 1;
-        if (index < 0 || index >= terminals.length) return false;
+        if (index < 0 || index >= terminals.size()) return false;
 
-        float[] spot = terminals[index];
-        float dx = (player.x + Player.SIZE / 2f) - (spot[0] + Player.SIZE / 2f);
-        float dy = (player.y + Player.SIZE / 2f) - (spot[1] + Player.SIZE / 2f);
-        return dx * dx + dy * dy <= INTERACT_RANGE * INTERACT_RANGE;
+        // Measured to the nearest edge of the painted console, not to its centre. The
+        // consoles are painted into the walls they hang on, so their centres sit ~45
+        // units inside solid rock; measuring from there charged the player for the
+        // console's own depth and left every terminal hovering at 72-80 against an 80
+        // limit, with one failing outright at 80.3.
+        return Level1Map.distanceSquaredToZone(terminals.get(index),
+            player.centreX(), player.centreY())
+            <= INTERACT_RANGE * INTERACT_RANGE;
     }
 
     private void drawWorld() {
@@ -768,7 +937,7 @@ public class Level1Screen implements Screen {
         Gdx.gl.glViewport(0, 0, half, screenH);
         world.render(batch, shape, player1.camera);
         world.renderPressurePlates(shape, player1.camera, plateP1Held, plateP2Held);
-        if (debugCollisionVisible) world.renderDebugCollision(shape, player1.camera);
+        if (debugCollisionVisible) world.renderDebugCollision(batch, player1.camera);
         drawEnemies(player1.camera);
 
         batch.setProjectionMatrix(player1.camera.combined);
@@ -781,7 +950,7 @@ public class Level1Screen implements Screen {
         Gdx.gl.glViewport(half + DIVIDER, 0, half, screenH);
         world.render(batch, shape, player2.camera);
         world.renderPressurePlates(shape, player2.camera, plateP1Held, plateP2Held);
-        if (debugCollisionVisible) world.renderDebugCollision(shape, player2.camera);
+        if (debugCollisionVisible) world.renderDebugCollision(batch, player2.camera);
         drawEnemies(player2.camera);
 
         batch.setProjectionMatrix(player2.camera.combined);
@@ -797,15 +966,40 @@ public class Level1Screen implements Screen {
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
         if (isHost || isDebug) {
-            for (Enemy e : swarmController.getEnemiesP1()) e.draw(batch, enemySprites);
-            for (Enemy e : swarmController.getEnemiesP2()) e.draw(batch, enemySprites);
+            for (Enemy e : swarmController.getEnemiesP1()) {
+                if (isOnScreen(camera, e.x, e.y)) e.draw(batch, enemySprites);
+            }
+            for (Enemy e : swarmController.getEnemiesP2()) {
+                if (isOnScreen(camera, e.x, e.y)) e.draw(batch, enemySprites);
+            }
         } else {
             // The client only receives positions, not per-enemy animation state, so it
             // renders a fixed frame rather than guessing a facing or death progress.
-            for (float[] pos : remoteEnemiesP1) drawRemoteEnemy(pos);
-            for (float[] pos : remoteEnemiesP2) drawRemoteEnemy(pos);
+            for (float[] pos : remoteEnemiesP1) {
+                if (isOnScreen(camera, pos[0], pos[1])) drawRemoteEnemy(pos);
+            }
+            for (float[] pos : remoteEnemiesP2) {
+                if (isOnScreen(camera, pos[0], pos[1])) drawRemoteEnemy(pos);
+            }
         }
         batch.end();
+    }
+
+    /**
+     * Frustum cull: each split-screen camera only shows CAM_W x CAM_H of the world, but
+     * both swarms were drawn into both viewports regardless of where they were. A player's
+     * own swarm is in their own wing, so the other camera was submitting a full set of
+     * off-screen sprites every frame for the GPU to discard. The margin is one draw size,
+     * so a sprite straddling the edge still renders.
+     */
+    private boolean isOnScreen(OrthographicCamera camera, float x, float y) {
+        // Read the camera's live viewport rather than CAM_W/CAM_H: updateWorldCameras()
+        // now varies the width with the display's aspect, and on a display wider than
+        // 16:9 the real view is wider than CAM_W — culling against the constant would
+        // discard enemies that are genuinely on screen, popping them out at the edges.
+        float margin = Enemy.DRAW_SIZE;
+        return Math.abs(x - camera.position.x) <= camera.viewportWidth / 2f + margin
+            && Math.abs(y - camera.position.y) <= camera.viewportHeight / 2f + margin;
     }
 
     private void drawRemoteEnemy(float[] pos) {
@@ -815,12 +1009,11 @@ public class Level1Screen implements Screen {
     }
 
     private void drawHealthBar(float x, float y, float health, Color color) {
-        float width = 150f, height = 16f;
         shape.begin(ShapeRenderer.ShapeType.Filled);
         shape.setColor(Color.DARK_GRAY);
-        shape.rect(x, y, width, height);
+        shape.rect(x, y, HUD_BAR_W, HUD_BAR_H);
         shape.setColor(color);
-        shape.rect(x, y, width * (health / Player.MAX_HEALTH), height);
+        shape.rect(x, y, HUD_BAR_W * (health / Player.MAX_HEALTH), HUD_BAR_H);
         shape.end();
     }
 
@@ -828,39 +1021,52 @@ public class Level1Screen implements Screen {
         batch.setProjectionMatrix(uiCamera.combined);
         shape.setProjectionMatrix(uiCamera.combined);
 
+        // Rows step down by a shared HUD_LINE_STEP from the top of the virtual space, so
+        // the whole block scales with the font instead of sitting at fixed pixel offsets.
+        float rowY = uiWorldH - HUD_MARGIN;
+
         batch.begin();
         font.setColor(Color.WHITE);
-        font.draw(batch, "Alert Meter: " + alertMeterValue, 20, Gdx.graphics.getBackBufferHeight() - 20);
+        font.draw(batch, "Alert Meter: " + alertMeterValue, HUD_MARGIN, rowY);
+        rowY -= HUD_LINE_STEP;
         if (reactorUnlocked) {
             font.setColor(Color.GREEN);
-            font.draw(batch, "Reactor unlocked! Find the exit gate.", 20, Gdx.graphics.getBackBufferHeight() - 45);
+            font.draw(batch, "Reactor unlocked! Find the exit gate.", HUD_MARGIN, rowY);
         } else {
             font.setColor(Color.LIGHT_GRAY);
             font.draw(batch, "Find your terminal and solve it together with your partner to unlock the reactor.",
-                20, Gdx.graphics.getBackBufferHeight() - 45);
+                HUD_MARGIN, rowY);
         }
+        rowY -= HUD_LINE_STEP;
         if (nearTerminal) {
             font.setColor(Color.CYAN);
-            font.draw(batch, "Press E to interact", 20, Gdx.graphics.getBackBufferHeight() - 70);
+            font.draw(batch, "Press E to interact", HUD_MARGIN, rowY);
         }
+        rowY -= HUD_LINE_STEP;
         if (isDebug && popupP1.isOpen() && popupP2.isOpen()) {
             font.setColor(Color.ORANGE);
             font.draw(batch, "SPACE = switch terminal   (typing into: player " + debugFocusedPlayerId + ")",
-                20, Gdx.graphics.getBackBufferHeight() - 95);
+                HUD_MARGIN, rowY);
         }
         batch.end();
 
         // Drawn once per split-screen half — otherwise both bars land inside the left
         // half only, since the window is split but this UI pass uses absolute screen coords.
-        float half = (Gdx.graphics.getBackBufferWidth() - DIVIDER) / 2f;
-        float barY = Gdx.graphics.getBackBufferHeight() - 115;
-        drawHealthBar(20, barY, player1.health, Color.CYAN);
-        drawHealthBar(190, barY, player2.health, Color.MAGENTA);
-        drawHealthBar(half + DIVIDER + 20, barY, player1.health, Color.CYAN);
-        drawHealthBar(half + DIVIDER + 190, barY, player2.health, Color.MAGENTA);
+        float half = uiWorldW / 2f;
+        float barY = rowY - HUD_LINE_STEP;
+        float barGap = HUD_BAR_W + 20f;
+        drawHealthBar(HUD_MARGIN, barY, player1.health, Color.CYAN);
+        drawHealthBar(HUD_MARGIN + barGap, barY, player2.health, Color.MAGENTA);
+        drawHealthBar(half + HUD_MARGIN, barY, player1.health, Color.CYAN);
+        drawHealthBar(half + HUD_MARGIN + barGap, barY, player2.health, Color.MAGENTA);
 
-        popupP1.render(shape, batch);
-        popupP2.render(shape, batch);
+        // Inventories draw under the terminal popups: handleInventoryInput() already
+        // closes them whenever a popup opens, so the two never actually overlap, but this
+        // keeps the ordering correct if that ever changes.
+        inventories.render(shape, batch, uiWorldW, uiWorldH, player1, player2, COLOR_CYAN, COLOR_MAGENTA);
+
+        popupP1.render(shape, batch, uiWorldW, uiWorldH);
+        popupP2.render(shape, batch, uiWorldW, uiWorldH);
 
         // Skipped when the JavaFX results window is showing the outcome instead.
         if (!resultsHandledExternally) {
@@ -889,14 +1095,15 @@ public class Level1Screen implements Screen {
      * no box-drawing or dash glyphs and renders them as empty squares).
      */
     private void drawBanner(String eyebrow, String title, Color titleColor, String body, String hint) {
-        float screenW = Gdx.graphics.getBackBufferWidth();
-        float screenH = Gdx.graphics.getBackBufferHeight();
-        float panelW = Math.min(760f, screenW * 0.6f);
-        float panelH = 320f;
+        // Virtual units throughout — the panel keeps the same proportions on every display.
+        float screenW = uiWorldW;
+        float screenH = uiWorldH;
+        float panelW = Math.min(980f, screenW * 0.6f);
+        float panelH = 420f;
         float panelX = (screenW - panelW) / 2f;
         float panelY = (screenH - panelH) / 2f;
-        float pad = 40f;
-        float notch = 18f;
+        float pad = 52f;
+        float notch = 22f;
 
         shape.begin(ShapeRenderer.ShapeType.Filled);
         shape.setColor(0f, 0f, 0f, 0.82f);
@@ -925,16 +1132,17 @@ public class Level1Screen implements Screen {
         float lineY = panelY + panelH - pad;
 
         batch.begin();
+        // Steps scale with the font sizes above — see UI_REF_W/UI_REF_H.
         subFont.setColor(COLOR_MAGENTA);
         subFont.draw(batch, eyebrow, panelX + pad, lineY, contentW, Align.left, true);
-        lineY -= 42;
+        lineY -= 54;
 
         bannerFont.setColor(titleColor);
         bannerFont.draw(batch, title, panelX + pad, lineY, contentW, Align.left, false);
-        lineY -= 72;
+        lineY -= 98;
 
         subFont.setColor(COLOR_TEXT);
-        lineY -= subFont.draw(batch, body, panelX + pad, lineY, contentW, Align.left, true).height + 26;
+        lineY -= subFont.draw(batch, body, panelX + pad, lineY, contentW, Align.left, true).height + 33;
 
         subFont.setColor(COLOR_DIM);
         subFont.draw(batch, hint, panelX + pad, lineY, contentW, Align.left, true);
@@ -946,9 +1154,12 @@ public class Level1Screen implements Screen {
 
     @Override
     public void resize(int w, int h) {
-        // Ignore the passed logical w/h — re-read the back buffer directly so this
-        // stays in the same physical-pixel space as the glViewport calls in drawWorld().
-        uiCamera.setToOrtho(false, Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
+        // Ignore the passed logical w/h — these re-read the back buffer directly so they
+        // stay in the same physical-pixel space as drawWorld()'s glViewport calls, then
+        // map it back onto the fixed virtual design space. Both matter when a projector
+        // is plugged in and the desktop switches resolution mid-session.
+        updateUiCamera();
+        updateWorldCameras();
     }
 
     @Override public void pause() {}
@@ -962,6 +1173,7 @@ public class Level1Screen implements Screen {
         batch.dispose();
         shape.dispose();
         font.dispose();
+        inventories.dispose();
         popupP1.dispose();
         popupP2.dispose();
         player1.dispose();
