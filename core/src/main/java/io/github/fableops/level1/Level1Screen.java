@@ -90,6 +90,9 @@ public class Level1Screen implements Screen {
     private volatile CodeFragmentPayload debugP2View;
     private volatile int alertMeterValue = 0;
     private volatile boolean reactorUnlocked = false;
+    // Rebuilt only when alertMeterValue changes — see alertMeterLabel().
+    private String cachedAlertLabel;
+    private int cachedAlertValue = -1;
     private boolean nearTerminal = false; // drives the "Press E to interact" prompt
     private boolean debugCollisionVisible = false; // F1 toggles collision rectangle overlay
     private boolean level1Complete = false; // set true when both players hold their plates
@@ -640,7 +643,7 @@ public class Level1Screen implements Screen {
      */
     private List<float[]> toPositions(List<Enemy> enemies, List<float[]> buffer) {
         buffer.clear();
-        for (Enemy e : enemies) buffer.add(e.getPosition());
+        for (int i = 0; i < enemies.size(); i++) buffer.add(enemies.get(i).getPosition());
         return buffer;
     }
 
@@ -935,8 +938,8 @@ public class Level1Screen implements Screen {
 
         // left half — P1 camera
         Gdx.gl.glViewport(0, 0, half, screenH);
-        world.render(batch, shape, player1.camera);
-        world.renderPressurePlates(shape, player1.camera, plateP1Held, plateP2Held);
+        world.render(batch, player1.camera);
+        world.renderOverlays(shape, player1.camera, plateP1Held, plateP2Held);
         if (debugCollisionVisible) world.renderDebugCollision(batch, player1.camera);
         drawEnemies(player1.camera);
 
@@ -948,8 +951,8 @@ public class Level1Screen implements Screen {
 
         // right half — P2 camera
         Gdx.gl.glViewport(half + DIVIDER, 0, half, screenH);
-        world.render(batch, shape, player2.camera);
-        world.renderPressurePlates(shape, player2.camera, plateP1Held, plateP2Held);
+        world.render(batch, player2.camera);
+        world.renderOverlays(shape, player2.camera, plateP1Held, plateP2Held);
         if (debugCollisionVisible) world.renderDebugCollision(batch, player2.camera);
         drawEnemies(player2.camera);
 
@@ -965,24 +968,32 @@ public class Level1Screen implements Screen {
     private void drawEnemies(OrthographicCamera camera) {
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
+        // Indexed loops: this runs twice a frame, once per split-screen camera, and an
+        // enhanced-for over an ArrayList allocates an Iterator each time.
         if (isHost || isDebug) {
-            for (Enemy e : swarmController.getEnemiesP1()) {
-                if (isOnScreen(camera, e.x, e.y)) e.draw(batch, enemySprites);
-            }
-            for (Enemy e : swarmController.getEnemiesP2()) {
-                if (isOnScreen(camera, e.x, e.y)) e.draw(batch, enemySprites);
-            }
+            drawSwarm(camera, swarmController.getEnemiesP1());
+            drawSwarm(camera, swarmController.getEnemiesP2());
         } else {
             // The client only receives positions, not per-enemy animation state, so it
             // renders a fixed frame rather than guessing a facing or death progress.
-            for (float[] pos : remoteEnemiesP1) {
-                if (isOnScreen(camera, pos[0], pos[1])) drawRemoteEnemy(pos);
-            }
-            for (float[] pos : remoteEnemiesP2) {
-                if (isOnScreen(camera, pos[0], pos[1])) drawRemoteEnemy(pos);
-            }
+            drawRemoteSwarm(camera, remoteEnemiesP1);
+            drawRemoteSwarm(camera, remoteEnemiesP2);
         }
         batch.end();
+    }
+
+    private void drawSwarm(OrthographicCamera camera, List<Enemy> enemies) {
+        for (int i = 0; i < enemies.size(); i++) {
+            Enemy e = enemies.get(i);
+            if (isOnScreen(camera, e.x, e.y)) e.draw(batch, enemySprites);
+        }
+    }
+
+    private void drawRemoteSwarm(OrthographicCamera camera, List<float[]> positions) {
+        for (int i = 0; i < positions.size(); i++) {
+            float[] pos = positions.get(i);
+            if (isOnScreen(camera, pos[0], pos[1])) drawRemoteEnemy(pos);
+        }
     }
 
     /**
@@ -1008,13 +1019,32 @@ public class Level1Screen implements Screen {
         batch.draw(enemySprites.walkFrame(0, 0f), pos[0] + offset, pos[1] + offset, draw, draw);
     }
 
+    /**
+     * Issues one bar's rects. Deliberately does NOT open its own batch — all four bars are
+     * drawn inside a single begin/end by the caller. Each begin/end pair flushes the
+     * pipeline and rebinds the shader, so four self-contained bars cost eight flushes a
+     * frame for two rectangles apiece.
+     */
     private void drawHealthBar(float x, float y, float health, Color color) {
-        shape.begin(ShapeRenderer.ShapeType.Filled);
         shape.setColor(Color.DARK_GRAY);
         shape.rect(x, y, HUD_BAR_W, HUD_BAR_H);
         shape.setColor(color);
         shape.rect(x, y, HUD_BAR_W * (health / Player.MAX_HEALTH), HUD_BAR_H);
-        shape.end();
+    }
+
+    /**
+     * The alert-meter caption, rebuilt only when the number actually changes.
+     *
+     * Concatenating it inline produced a fresh String (and its StringBuilder and char
+     * array) on every rendered frame — ~180 dead objects a second for a label that changes
+     * a handful of times per match. Same approach LobbyScreen already uses for its clock.
+     */
+    private String alertMeterLabel() {
+        if (alertMeterValue != cachedAlertValue || cachedAlertLabel == null) {
+            cachedAlertValue = alertMeterValue;
+            cachedAlertLabel = "Alert Meter: " + cachedAlertValue;
+        }
+        return cachedAlertLabel;
     }
 
     private void drawUI() {
@@ -1027,7 +1057,7 @@ public class Level1Screen implements Screen {
 
         batch.begin();
         font.setColor(Color.WHITE);
-        font.draw(batch, "Alert Meter: " + alertMeterValue, HUD_MARGIN, rowY);
+        font.draw(batch, alertMeterLabel(), HUD_MARGIN, rowY);
         rowY -= HUD_LINE_STEP;
         if (reactorUnlocked) {
             font.setColor(Color.GREEN);
@@ -1055,10 +1085,12 @@ public class Level1Screen implements Screen {
         float half = uiWorldW / 2f;
         float barY = rowY - HUD_LINE_STEP;
         float barGap = HUD_BAR_W + 20f;
+        shape.begin(ShapeRenderer.ShapeType.Filled);
         drawHealthBar(HUD_MARGIN, barY, player1.health, Color.CYAN);
         drawHealthBar(HUD_MARGIN + barGap, barY, player2.health, Color.MAGENTA);
         drawHealthBar(half + HUD_MARGIN, barY, player1.health, Color.CYAN);
         drawHealthBar(half + HUD_MARGIN + barGap, barY, player2.health, Color.MAGENTA);
+        shape.end();
 
         // Inventories draw under the terminal popups: handleInventoryInput() already
         // closes them whenever a popup opens, so the two never actually overlap, but this

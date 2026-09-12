@@ -187,62 +187,51 @@ public class Level1Map implements Collidable {
         return dx * dx + dy * dy;
     }
 
-    public void render(SpriteBatch batch, ShapeRenderer shape, OrthographicCamera camera) {
+    /** The illustrated background. Overlays are a separate pass — see renderOverlays(). */
+    public void render(SpriteBatch batch, OrthographicCamera camera) {
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
         batch.draw(background, 0, 0, WORLD_W, WORLD_H);
         batch.end();
-
-        renderTerminalGlow(shape, camera);
     }
 
     /**
-     * Bright yellow wash over every painted terminal zone, so the consoles read as
-     * interactable rather than as background art.
+     * Every interactive marker on the map: the yellow wash over each painted terminal
+     * zone, and both pressure plates lit up while a player stands on one. Without these
+     * they are all just background art with no sign that anything can be used.
      *
-     * Drawn over the zone's actual painted bounds rather than as a fixed-size marker, so
-     * the highlight always matches whatever was painted. Blending is enabled explicitly:
+     * Terminals and plates share one filled pass and one line pass rather than opening
+     * four of their own. Every ShapeRenderer begin/end flushes the pipeline and rebinds
+     * the shader, and this runs once per split-screen camera — so four passes cost eight
+     * flushes a frame to draw roughly a dozen rectangles.
+     *
+     * Zones are drawn at their actual painted bounds rather than as fixed-size markers, so
+     * a highlight always matches whatever is in the mask. Blending is enabled explicitly:
      * ShapeRenderer does not manage it, and without this the 50% alpha would silently
-     * render as solid yellow wherever a previous SpriteBatch had left blending disabled.
+     * render as solid wherever a previous SpriteBatch had left blending disabled.
      */
-    private void renderTerminalGlow(ShapeRenderer shape, OrthographicCamera camera) {
+    public void renderOverlays(ShapeRenderer shape, OrthographicCamera camera,
+                               boolean p1Standing, boolean p2Standing) {
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
-
         shape.setProjectionMatrix(camera.combined);
+
         shape.begin(ShapeRenderer.ShapeType.Filled);
         shape.setColor(GLOW_R, GLOW_G, GLOW_B, GLOW_ALPHA);
-        for (Rectangle zone : terminalZonesP1) shape.rect(zone.x, zone.y, zone.width, zone.height);
-        for (Rectangle zone : terminalZonesP2) shape.rect(zone.x, zone.y, zone.width, zone.height);
-        shape.end();
-
-        // A solid outline at full alpha keeps the edge crisp — a 50% fill alone reads as
-        // a vague smear against the lit floor underneath.
-        shape.begin(ShapeRenderer.ShapeType.Line);
-        shape.setColor(GLOW_R, GLOW_G, GLOW_B, 1f);
-        for (Rectangle zone : terminalZonesP1) shape.rect(zone.x, zone.y, zone.width, zone.height);
-        for (Rectangle zone : terminalZonesP2) shape.rect(zone.x, zone.y, zone.width, zone.height);
-        shape.end();
-
-        Gdx.gl.glDisable(GL20.GL_BLEND);
-    }
-
-    /**
-     * Draws both pressure plates, lit up while a player is stood on one. Without this
-     * they're just background art with no indication they're interactive.
-     */
-    public void renderPressurePlates(ShapeRenderer shape, OrthographicCamera camera,
-                                     boolean p1Standing, boolean p2Standing) {
-        shape.setProjectionMatrix(camera.combined);
-
-        shape.begin(ShapeRenderer.ShapeType.Filled);
+        drawZones(shape, terminalZonesP1);
+        drawZones(shape, terminalZonesP2);
         shape.setColor(0f, 0.9f, 1f, p1Standing ? 0.45f : 0.18f);
         shape.rect(pressurePlateP1.x, pressurePlateP1.y, pressurePlateP1.width, pressurePlateP1.height);
         shape.setColor(1f, 0.16f, 0.43f, p2Standing ? 0.45f : 0.18f);
         shape.rect(pressurePlateP2.x, pressurePlateP2.y, pressurePlateP2.width, pressurePlateP2.height);
         shape.end();
 
+        // Solid outlines at full alpha keep the edges crisp — a 50% fill alone reads as a
+        // vague smear against the lit floor underneath.
         shape.begin(ShapeRenderer.ShapeType.Line);
+        shape.setColor(GLOW_R, GLOW_G, GLOW_B, 1f);
+        drawZones(shape, terminalZonesP1);
+        drawZones(shape, terminalZonesP2);
         shape.setColor(0f, 0.9f, 1f, 1f);
         shape.rect(pressurePlateP1.x, pressurePlateP1.y, pressurePlateP1.width, pressurePlateP1.height);
         shape.setColor(1f, 0.16f, 0.43f, 1f);
@@ -252,6 +241,16 @@ public class Level1Map implements Collidable {
             shape.rect(exitGateZone.x, exitGateZone.y, exitGateZone.width, exitGateZone.height);
         }
         shape.end();
+
+        Gdx.gl.glDisable(GL20.GL_BLEND);
+    }
+
+    /** Indexed loop — the enhanced-for over an ArrayList allocates an Iterator per call. */
+    private static void drawZones(ShapeRenderer shape, List<Rectangle> zones) {
+        for (int i = 0; i < zones.size(); i++) {
+            Rectangle zone = zones.get(i);
+            shape.rect(zone.x, zone.y, zone.width, zone.height);
+        }
     }
 
     /**

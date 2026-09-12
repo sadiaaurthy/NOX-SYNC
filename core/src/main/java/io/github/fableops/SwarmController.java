@@ -140,11 +140,20 @@ public class SwarmController {
         spawnCountdown = SPAWN_INTERVAL_SECONDS;
     }
 
-    /** Advances one side and clears out enemies whose death animation has played out. */
+    /**
+     * Advances one side and clears out enemies whose death animation has played out.
+     *
+     * Indexed loops throughout this class rather than enhanced-for: an enhanced-for over an
+     * ArrayList allocates an Iterator every call, and these run per side, per frame.
+     */
     private void updateSide(List<Enemy> list, float delta, Player target, Collidable world) {
-        for (Enemy e : list) e.update(delta, target, world);
+        for (int i = 0; i < list.size(); i++) {
+            list.get(i).update(delta, target, world);
+        }
         separate(list, delta, world);
-        list.removeIf(Enemy::isFinished);
+        for (int i = list.size() - 1; i >= 0; i--) {
+            if (list.get(i).isFinished()) list.remove(i);
+        }
     }
 
     /**
@@ -192,7 +201,8 @@ public class SwarmController {
         Enemy nearest = null;
         float nearestDist = Float.MAX_VALUE;
 
-        for (Enemy e : list) {
+        for (int i = 0; i < list.size(); i++) {
+            Enemy e = list.get(i);
             if (!e.isActive()) continue; // already dying — don't waste a hit on a corpse
             float dx = (e.x + Enemy.SIZE / 2f) - x;
             float dy = (e.y + Enemy.SIZE / 2f) - y;
@@ -212,7 +222,8 @@ public class SwarmController {
     /** True if an enemy on the given side is overlapping the given box (for contact damage). */
     public boolean isTouchingAny(int side, float x, float y, float w, float h) {
         List<Enemy> list = (side == 1) ? enemiesP1 : enemiesP2;
-        for (Enemy e : list) {
+        for (int i = 0; i < list.size(); i++) {
+            Enemy e = list.get(i);
             if (!e.isActive()) continue; // a corpse shouldn't keep damaging the player
             if (x < e.x + Enemy.SIZE && x + w > e.x && y < e.y + Enemy.SIZE && y + h > e.y) {
                 return true;
