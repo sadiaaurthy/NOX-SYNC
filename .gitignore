@@ -69,6 +69,7 @@ www-test/
 .metadata/
 /android/bin/
 /core/bin/
+/launcher/bin/
 /lwjgl2/bin/
 /lwjgl3/bin/
 /html/bin/
