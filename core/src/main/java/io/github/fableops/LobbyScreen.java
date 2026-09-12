@@ -14,10 +14,13 @@ import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
+import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.utils.Align;
 import com.badlogic.gdx.utils.IntArray;
 import com.badlogic.gdx.utils.viewport.FitViewport;
 import com.badlogic.gdx.utils.viewport.Viewport;
@@ -142,6 +145,68 @@ public class LobbyScreen implements Screen {
 
     private final DateTimeFormatter clockFormat = DateTimeFormatter.ofPattern("HH:mm:ss");
 
+    /**
+     * Every binding in the game, laid out in two columns to the right of the operations
+     * panel. A null key marks a section heading rather than a row.
+     *
+     * Kept as data rather than a wall of draw calls so a new binding is one line here and
+     * the layout re-flows itself — the alternative drifts out of date the first time a key
+     * changes, and a controls list that lies is worse than none.
+     */
+    private static final String[][] CONTROLS_LEFT = {
+        {null, "MOVE"},
+        {"W A S D", "Player 1"},
+        {"ARROWS", "Player 2"},
+        {null, "FIGHT"},
+        {"F", "Player 1 attack"},
+        {"R-SHIFT", "Player 2 attack"},
+        {null, "WORLD"},
+        {"E", "Use terminal"},
+        {"1", "Player 1 inventory"},
+        {"2", "Player 2 inventory"},
+        {null, "SYSTEM"},
+        {"F1", "Collision overlay"},
+        {"F2", "UI size / projector"},
+        {"K", "Skip stage (debug)"},
+        {"ESC", "Back / quit"},
+    };
+
+    private static final String[][] CONTROLS_RIGHT = {
+        {null, "TERMINAL"},
+        {"TAB", "Next position"},
+        {"0 - 9", "Enter digit"},
+        {"BKSP", "Delete digit"},
+        {"ENTER", "Submit"},
+        {"SPACE", "Switch terminal"},
+        {"ESC", "Close"},
+        {null, "INVENTORY"},
+        {"WASD / ARR", "Move cursor"},
+        {"TAB", "Shared slot"},
+        {"R", "Put / take"},
+        {"ENTER", "Use item"},
+        {"ESC", "Close"},
+    };
+
+    private static final float CONTROLS_X = 936f;
+    private static final float CONTROLS_W = 580f;
+    private static final float CONTROLS_PAD = 18f;
+    private static final float CONTROLS_ROW_H = 21f;
+    private static final float CONTROLS_HEADER_H = 26f;
+    private static final float CONTROLS_KEY_W = 104f;
+    private static final float CONTROLS_FONT_SCALE = 1.1f;
+
+    private Rectangle controlsRect;
+    private boolean disposed = false; // guards dispose() against running twice
+
+    /**
+     * Drawn with the bitmap pixel font rather than {@link TextTexture}, unlike the rest of
+     * this screen. Roughly sixty short strings live in this panel; one texture per unique
+     * string would mean sixty GL textures and sixty AWT metric probes at startup, for text
+     * that never changes. One font page covers all of it, and its hard pixel edges match
+     * the in-game panels the player sees next.
+     */
+    private BitmapFont controlsFont;
+
     public LobbyScreen(Main game) {
         this.game = game;
 
@@ -153,6 +218,12 @@ public class LobbyScreen implements Screen {
 
         batch = new SpriteBatch();
         shape = new ShapeRenderer();
+
+        controlsFont = new BitmapFont(Gdx.files.internal("pixel.fnt"), false);
+        controlsFont.getRegion().getTexture()
+            .setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest);
+        controlsFont.setUseIntegerPositions(false);
+        controlsFont.getData().setScale(CONTROLS_FONT_SCALE);
 
         generateStaticTextures();
         seedPoints();
@@ -260,6 +331,14 @@ public class LobbyScreen implements Screen {
         panelRect = new Rectangle(panelX, panelBottom, panelW, panelTop - panelBottom);
 
         statusY = panelBottom - 24f;
+
+        // Controls panel: top-aligned with the operations panel, height driven by whichever
+        // column has more entries so adding a binding never needs a hand-tuned number.
+        int rows = Math.max(CONTROLS_LEFT.length, CONTROLS_RIGHT.length);
+        int headers = Math.max(countHeaders(CONTROLS_LEFT), countHeaders(CONTROLS_RIGHT));
+        float controlsH = 2 * CONTROLS_PAD + CONTROLS_HEADER_H
+            + (rows - headers) * CONTROLS_ROW_H + headers * CONTROLS_HEADER_H;
+        controlsRect = new Rectangle(CONTROLS_X, panelTop - controlsH, CONTROLS_W, controlsH);
 
         // Background points/links stay sparse directly behind the whole central column
         // (eyebrow through panel bottom), with a small margin — not just the panel itself.
@@ -493,6 +572,7 @@ public class LobbyScreen implements Screen {
         drawEyebrowMarker();
         drawTitleUnderline();
         drawPanelShapes();
+        drawControlsShapes();
         drawOpRowShapes(hostRect, ORANGE, ORANGE_DIM, hostHover);
         drawOpRowShapes(joinLanRect, CYAN, CYAN_DIM, joinLanHover);
         drawOpRowShapes(joinLocalRect, CYAN, CYAN_DIM, joinLocalHover);
@@ -568,6 +648,32 @@ public class LobbyScreen implements Screen {
         shape.rect(mx + 22f, my, 1f, 5f);
     }
 
+    private static int countHeaders(String[][] rows) {
+        int n = 0;
+        for (String[] row : rows) {
+            if (row[0] == null) n++;
+        }
+        return n;
+    }
+
+    /** Same chrome as the operations panel, so the two read as one interface. */
+    private void drawControlsShapes() {
+        shape.setColor(PANEL_BG);
+        shape.rect(controlsRect.x, controlsRect.y, controlsRect.width, controlsRect.height);
+
+        shape.setColor(LINE_STRONG);
+        shape.rect(controlsRect.x, controlsRect.y, controlsRect.width, 2f);
+        shape.rect(controlsRect.x, controlsRect.y + controlsRect.height - 2f, controlsRect.width, 2f);
+        shape.rect(controlsRect.x, controlsRect.y, 2f, controlsRect.height);
+        shape.rect(controlsRect.x + controlsRect.width - 2f, controlsRect.y, 2f, controlsRect.height);
+
+        // Divider between the two columns, so the eye doesn't read across the gap.
+        shape.setColor(LINE);
+        shape.rect(controlsRect.x + controlsRect.width / 2f - 1f,
+            controlsRect.y + CONTROLS_PAD,
+            2f, controlsRect.height - 2 * CONTROLS_PAD - CONTROLS_HEADER_H);
+    }
+
     private void drawOpRowShapes(Rectangle r, Color accent, Color accentDim, boolean hover) {
         // base fill — explicit color every time, never inherited from a previous draw.
         float baseAlpha = hover ? 0.06f : 0.02f;
@@ -635,11 +741,48 @@ public class LobbyScreen implements Screen {
         drawOpRowText(debugRect, keyDTex, labelDebugTex, MAGENTA, MAGENTA_DIM, debugHover);
 
         drawIpRowText();
+        drawControlsText();
 
         drawTex(statusTex, panelRect.x, statusY, TEXT_DIM);
         drawTex(buildTex, panelRect.x + panelRect.width - buildTex.width, statusY, TEXT_DIM);
 
         batch.end();
+    }
+
+    private void drawControlsText() {
+        float top = controlsRect.y + controlsRect.height - CONTROLS_PAD;
+
+        controlsFont.setColor(TEXT_SECONDARY);
+        controlsFont.draw(batch, "CONTROLS", controlsRect.x + CONTROLS_PAD, top);
+
+        float columnW = (controlsRect.width - 2 * CONTROLS_PAD) / 2f;
+        float bodyTop = top - CONTROLS_HEADER_H;
+        drawControlsColumn(CONTROLS_LEFT, controlsRect.x + CONTROLS_PAD, bodyTop, columnW);
+        drawControlsColumn(CONTROLS_RIGHT, controlsRect.x + CONTROLS_PAD + columnW + 12f,
+            bodyTop, columnW - 12f);
+    }
+
+    /**
+     * Section headings take the accent colour and a taller slot; rows are key then label.
+     * The key column is fixed width so every label starts on the same vertical line, which
+     * is what makes a list this long scannable rather than a wall of text.
+     */
+    private void drawControlsColumn(String[][] rows, float x, float top, float width) {
+        float y = top;
+        for (String[] row : rows) {
+            if (row[0] == null) {
+                controlsFont.setColor(ORANGE);
+                controlsFont.draw(batch, row[1], x, y);
+                y -= CONTROLS_HEADER_H;
+            } else {
+                controlsFont.setColor(CYAN);
+                controlsFont.draw(batch, row[0], x, y);
+                controlsFont.setColor(TEXT_SECONDARY);
+                controlsFont.draw(batch, row[1], x + CONTROLS_KEY_W, y,
+                    width - CONTROLS_KEY_W, Align.left, false);
+                y -= CONTROLS_ROW_H;
+            }
+        }
     }
 
     private float chromeTextY() {
@@ -699,12 +842,26 @@ public class LobbyScreen implements Screen {
 
     @Override public void pause() {}
     @Override public void resume() {}
-    @Override public void hide() {}
+    /**
+     * Releases this screen's GPU resources when it is navigated away from.
+     *
+     * libGDX's Game.setScreen() only calls hide() on the outgoing screen — never dispose()
+     * — so without this every lobby leaked its batch, shape renderer, text textures and
+     * font each time a session started. Safe here because a lobby is never returned to:
+     * both Main.create() and Level1Screen.returnToMainMenu() always construct a fresh one.
+     */
+    @Override
+    public void hide() {
+        dispose();
+    }
 
     @Override
     public void dispose() {
+        if (disposed) return; // hide() and an explicit dispose() can both reach here
+        disposed = true;
         shape.dispose();
         batch.dispose();
+        controlsFont.dispose();
         for (TextTexture t : staticTextures) t.dispose();
         if (clockTex != null) clockTex.dispose();
         if (statusTex != null) statusTex.dispose();

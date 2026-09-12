@@ -1,6 +1,7 @@
 package io.github.fableops.level1;
 
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
@@ -8,102 +9,81 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.Rectangle;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 import io.github.fableops.Collidable;
 
 /**
- * Level 1's map — a single illustrated background image (not a Tiled map), with
- * hand-traced floor rectangles for collision instead of a wall blacklist, since
- * the art is mostly void with narrow corridors. Coordinates are a first-pass
- * trace off the concept art — expect to nudge them after playtesting.
+ * Level 1's map — a single illustrated background image, with collision read per-pixel
+ * from a painted mask (see {@link CollisionMask}) rather than hand-traced rectangles.
  *
- * Y is flipped on load: image pixel rows go top-to-bottom, LibGDX world space
- * goes bottom-to-top, so every rectangle below is defined as (imageY -> worldY).
+ * The rectangle lists this class used to carry are gone entirely. They could only
+ * approximate the art, needed a player-width overlap at every room seam to avoid
+ * invisible walls, and imposed a minimum corridor width. Overlapping-rectangle
+ * bookkeeping doesn't exist any more: the painted colour at a point *is* the answer.
+ *
+ * Y is flipped throughout: image rows run top-to-bottom, world space bottom-to-top.
  */
 public class Level1Map implements Collidable {
 
     public static final float WORLD_W = 2752f;
     public static final float WORLD_H = 1536f;
 
-    private Texture background;
+    /**
+     * Fraction of the hitbox sampled per axis. A 3x3 grid (corners, edge midpoints and
+     * centre) is enough to stop a player squeezing through a wall thinner than their
+     * body, while still letting them slide along it — Player moves each axis separately,
+     * so a blocked X still permits the Y step.
+     */
+    private static final float[] SAMPLE_FRACTIONS = {0f, 0.5f, 1f};
 
-    // Always-open floor — Player 1 side (left room).
-    private final List<Rectangle> floorP1 = new ArrayList<>();
-    // Always-open floor — Player 2 side (right room, mirrored from P1).
-    private final List<Rectangle> floorP2 = new ArrayList<>();
-    // Shared center chamber — always physically there, but only reachable once
-    // both gates are open (see gateP1Open / gateP2Open).
-    private final Rectangle centerChamber;
+    /** Level 1 has three puzzle stages, so three terminals per side. */
+    private static final int STAGE_COUNT = 3;
+
+    // Terminal highlight: bright yellow at 50% opacity, per the art direction. The mask
+    // paints them neon green (00FF11) purely so they're distinguishable while authoring —
+    // the mask is never shown to players, so the two colours are unrelated by design.
+    private static final float GLOW_R = 1f;
+    private static final float GLOW_G = 0.95f;
+    private static final float GLOW_B = 0.1f;
+    private static final float GLOW_ALPHA = 0.5f;
+
+    private final Texture background;
+    private final CollisionMask mask;
+
+    // Still explicit rectangles rather than mask colours. Terminals now come from the mask
+    // (see splitTerminalZones), but the plates and the exit gate zone are not painted yet —
+    // CLASS_PLATE has zero pixels in the current export, so reading them from the mask
+    // would silently produce no plates at all.
     private final Rectangle exitGateZone;
-    // One pressure plate per player, on the wired consoles either side of the reactor.
     private final Rectangle pressurePlateP1;
     private final Rectangle pressurePlateP2;
+
     private boolean exitGateOpen = false;
+    private boolean reactorUnlocked = false;
 
-    private final Rectangle gateP1;
-    private final Rectangle gateP2;
-    private boolean gateP1Open = false;
-    private boolean gateP2Open = false;
-
-    // Union of every traced rectangle regardless of side/gate-open state — used only
-    // while INTERNAL_WALLS_ENABLED is false, so "no internal walls between P1/P2" still
-    // keeps players inside the building's actual footprint instead of the whole
-    // rectangular world border (which includes plenty of black void the art never draws).
-    private final List<Rectangle> allTracedFloor = new ArrayList<>();
-    /** Scratch box for collides(), see the note there. Not thread-safe by design. */
-    private final Rectangle collisionProbe = new Rectangle();
+    /**
+     * The painted terminal zones, and the centre of each. Both are read out of the mask
+     * at construction instead of being hand-typed: the coordinates used to be literals
+     * that had drifted ~60 units away from where the art actually put the consoles, which
+     * left Stage 1's terminal permanently outside interaction range. Painting them is now
+     * the single source of truth — move the paint and the game follows.
+     */
+    private final List<Rectangle> terminalZonesP1 = new ArrayList<>();
+    private final List<Rectangle> terminalZonesP2 = new ArrayList<>();
 
     public Level1Map() {
         background = new Texture(Gdx.files.internal("Level1Map.png"));
+        mask = new CollisionMask("Level1Mapcollision.png", WORLD_W, WORLD_H);
 
-        // --- Player 1 (left) room floor, traced from the art ---
-        // Re-traced against the actual Level1Map.png (the original pass was off —
-        // doorway rectangles didn't line up with the real door gaps, which is what
-        // caused both the "walking through walls" and "getting stuck" reports).
-        // Every rectangle now overlaps its neighbor by at least a player's width/height
-        // (SIZE=100) at the seam, so the player's hitbox is always fully contained in
-        // at least one rectangle during a transition — that overlap margin is what
-        // fixes getting stuck at doorways, not just the coordinates themselves.
-        addFloorRect(floorP1, 470, 1290, 20, 460);     // top room + drone corridor
-        addFloorRect(floorP1, 630, 810, 260, 520);     // doorway: top -> middle room
-        addFloorRect(floorP1, 75, 955, 420, 800);      // middle room (white/cyan tiles, terminals)
-        addFloorRect(floorP1, 630, 810, 700, 920);     // doorway: middle room -> hallway
-        addFloorRect(floorP1, 75, 850, 800, 1010);     // connecting hallway
-        addFloorRect(floorP1, 630, 810, 890, 1060);    // doorway: hallway -> bottom room
-        addFloorRect(floorP1, 75, 850, 960, 1310);     // bottom server room
+        splitTerminalZones();
 
-        gateP1 = imageRectToWorld(740, 1330, 880, 1260); // locked connector into center
-
-        // --- Player 2 (right) room floor — mirrored horizontally from P1 ---
-        for (Rectangle r : floorP1) {
-            floorP2.add(mirrorX(r));
-        }
-        gateP2 = mirrorX(gateP1);
-
-        // --- Shared center reactor chamber ---
-        // Traced to the octagon's actual interior. The previous rect (700..2050) reached
-        // into both purple side-rooms' walls, and its top edge overlapped the gates by
-        // only 60px — less than the player's 100px box, so nobody could walk in from a
-        // gate, and standing centred on a plate was impossible.
-        centerChamber = imageRectToWorld(920, 1850, 1120, 1470);
         exitGateZone = imageRectToWorld(1280, 1470, 1470, 1536);
-
         // The two wired consoles flanking the reactor, used as the pressure plates.
         pressurePlateP1 = imageRectToWorld(1078, 1248, 1190, 1280);
         pressurePlateP2 = imageRectToWorld(1552, 1722, 1190, 1280);
-
-        allTracedFloor.addAll(floorP1);
-        allTracedFloor.addAll(floorP2);
-        allTracedFloor.add(gateP1);
-        allTracedFloor.add(gateP2);
-        allTracedFloor.add(centerChamber);
     }
-
-    public Rectangle getExitGateZone()
-        {
-            return exitGateZone;
-        }
 
     public Rectangle getPressurePlateP1() { return pressurePlateP1; }
 
@@ -112,58 +92,35 @@ public class Level1Map implements Collidable {
     /** Called once both players are stood on their plates at the same time. */
     public void openExitGate() { exitGateOpen = true; }
 
-    public boolean isExitGateOpen() { return exitGateOpen; }
+    /**
+     * Called once Stage 3 is solved. Opens the gate-coloured floor and, just as
+     * importantly, drops the wing restriction: from here both players may walk the cyan
+     * wing, the magenta wing and the shared room alike. Until this point each is sealed
+     * into their own side, which is what makes the puzzle need two people.
+     */
+    public void unlockReactor() { reactorUnlocked = true; }
 
-    private void addFloorRect(List<Rectangle> list, float x1, float x2, float yTop, float yBottom) {
-        list.add(imageRectToWorld(x1, x2, yTop, yBottom));
-    }
-
-    /** Converts an image-pixel rectangle (x1..x2, yTop..yBottom, Y down) to world space (Y up). */
+    /**
+     * Converts a rectangle given in image-pixel coordinates (Y down) to world space
+     * (Y up). These constants were authored against the original full-size art, whose
+     * pixel dimensions matched WORLD_W x WORLD_H exactly, so they are already in world
+     * units — unlike the collision mask, which is sampled by ratio and so may be any size.
+     */
     private Rectangle imageRectToWorld(float x1, float x2, float yTop, float yBottom) {
-        float worldY = WORLD_H - yBottom;
-        float height = yBottom - yTop;
-        return new Rectangle(x1, worldY, x2 - x1, height);
+        return new Rectangle(x1, WORLD_H - yBottom, x2 - x1, yBottom - yTop);
     }
-
-    private Rectangle mirrorX(Rectangle r) {
-        float mirroredX = WORLD_W - r.x - r.width;
-        return new Rectangle(mirroredX, r.y, r.width, r.height);
-    }
-
-    /** Called once Stage 3 is solved — opens both gates into the center chamber. */
-    public void openGates() {
-        gateP1Open = true;
-        gateP2Open = true;
-    }
-
-    // TEMPORARY, per explicit request: no per-side restriction (P1 isn't confined to
-    // floorP1, P2 isn't confined to floorP2, gates don't need to be solved) — but movement
-    // is still confined to the union of every traced rectangle, not the whole rectangular
-    // world border, so players can't wander into the black void between/around the
-    // building's wings. Flip back to true once internal walls come back for real.
-    private static final boolean INTERNAL_WALLS_ENABLED = true;
 
     @Override
     public boolean collides(float x, float y, float w, float h, int playerSide) {
-        // Reused instead of allocating: collides() runs twice per axis for every player
-        // and every enemy, so with a full swarm this was churning through thousands of
-        // throwaway Rectangles per second. Safe to share — all callers are on the single
-        // render thread.
-        Rectangle box = collisionProbe.set(x, y, w, h);
-
-        if (!INTERNAL_WALLS_ENABLED) {
-            for (Rectangle r : allTracedFloor) if (r.contains(box)) return false;
-            return true;
+        // Any sampled point landing on a non-walkable surface blocks the whole move.
+        for (float fx : SAMPLE_FRACTIONS) {
+            float sampleX = x + fx * (w - 1f);
+            for (float fy : SAMPLE_FRACTIONS) {
+                float sampleY = y + fy * (h - 1f);
+                if (!mask.isWalkable(sampleX, sampleY, playerSide, reactorUnlocked)) return true;
+            }
         }
-
-        List<Rectangle> ownFloor = (playerSide == 1) ? floorP1 : floorP2;
-        Rectangle ownGate = (playerSide == 1) ? gateP1 : gateP2;
-        boolean ownGateOpen = (playerSide == 1) ? gateP1Open : gateP2Open;
-
-        for (Rectangle r : ownFloor) if (r.contains(box)) return false;
-        if (ownGateOpen && (ownGate.contains(box) || centerChamber.contains(box))) return false;
-
-        return true; // outside this player's own walkable rectangles = solid
+        return false;
     }
 
     @Override
@@ -176,28 +133,58 @@ public class Level1Map implements Collidable {
     public float[] getSpawnP1() { return new float[]{700f, 1200f}; }
     public float[] getSpawnP2() { return new float[]{1952f, 1200f}; }
 
-    // Terminal positions in the white/cyan middle room — matches the 3 panels in the
-    // art. Placement only for now; Terminal.interact() wiring is a separate step.
-    public float[][] getTerminalSpotsP1() {
-        return new float[][] {
-            imagePointToWorld(150, 560),
-            imagePointToWorld(480, 560),
-            imagePointToWorld(820, 560)
-        };
-    }
+    // Terminal positions in the white/cyan middle room — matches the 3 panels in the art.
+    // Built once in the constructor: these never change, but the getters are called from
+    // both the render loop (twice, once per split-screen camera) and the interaction
+    // check, so rebuilding the arrays on every call was allocating ~30 short-lived
+    // arrays per frame purely to hand back constants.
+    /**
+     * The painted terminal zones in world space, ordered by stage.
+     *
+     * Handed out as bounds rather than centres deliberately. A console is painted into
+     * the wall it hangs on, so its centre sits ~45 units inside solid rock that no player
+     * can ever stand in — measuring interaction range from there charges the player for
+     * the console's own depth. Callers measure to the nearest point on the rectangle.
+     */
+    public List<Rectangle> getTerminalZonesP1() { return terminalZonesP1; }
 
-    public float[][] getTerminalSpotsP2() {
-        float[][] p1Spots = getTerminalSpotsP1();
-        float[][] mirrored = new float[p1Spots.length][2];
-        for (int i = 0; i < p1Spots.length; i++) {
-            mirrored[i][0] = WORLD_W - p1Spots[i][0] - 100f;
-            mirrored[i][1] = p1Spots[i][1];
+    public List<Rectangle> getTerminalZonesP2() { return terminalZonesP2; }
+
+    /**
+     * Sorts the painted terminal blobs into each player's wing and orders them by stage.
+     *
+     * Stage N uses terminal index N-1, and the ordering runs outward-in on both sides:
+     * P1 left-to-right, P2 right-to-left. That mirrors the original hardcoded layout, so
+     * players still start at the terminal furthest from the reactor and work inward.
+     */
+    private void splitTerminalZones() {
+        List<Rectangle> all = mask.findZones(CollisionMask.CLASS_TERM);
+        for (Rectangle zone : all) {
+            if (zone.x + zone.width / 2f < WORLD_W / 2f) terminalZonesP1.add(zone);
+            else terminalZonesP2.add(zone);
         }
-        return mirrored;
+        terminalZonesP1.sort(Comparator.comparingDouble(r -> r.x));
+        terminalZonesP2.sort(Comparator.comparingDouble(r -> -r.x));
+
+        // A miscounted mask means unreachable stages, which is otherwise a silent and
+        // very confusing failure — so say so loudly at load rather than at play time.
+        if (terminalZonesP1.size() != STAGE_COUNT || terminalZonesP2.size() != STAGE_COUNT) {
+            Gdx.app.error("Level1Map", "Expected " + STAGE_COUNT + " painted terminal zones per side ("
+                + CollisionMask.describeClass(CollisionMask.CLASS_TERM) + "), found "
+                + terminalZonesP1.size() + " for P1 and " + terminalZonesP2.size() + " for P2. "
+                + "Stages without a terminal cannot be opened. Check the mask export is flat "
+                + "(no layer opacity or blending) and that every console is painted.");
+        }
     }
 
-    private float[] imagePointToWorld(float imageX, float imageY) {
-        return new float[]{imageX, WORLD_H - imageY};
+    /**
+     * Squared distance from a point to the nearest point on a rectangle, 0 when inside.
+     * Squared so callers can compare against a squared range without a sqrt per frame.
+     */
+    public static float distanceSquaredToZone(Rectangle zone, float px, float py) {
+        float dx = Math.max(Math.max(zone.x - px, 0f), px - (zone.x + zone.width));
+        float dy = Math.max(Math.max(zone.y - py, 0f), py - (zone.y + zone.height));
+        return dx * dx + dy * dy;
     }
 
     public void render(SpriteBatch batch, ShapeRenderer shape, OrthographicCamera camera) {
@@ -206,13 +193,38 @@ public class Level1Map implements Collidable {
         batch.draw(background, 0, 0, WORLD_W, WORLD_H);
         batch.end();
 
-        // Visible markers at each terminal so they're actually findable in-game.
+        renderTerminalGlow(shape, camera);
+    }
+
+    /**
+     * Bright yellow wash over every painted terminal zone, so the consoles read as
+     * interactable rather than as background art.
+     *
+     * Drawn over the zone's actual painted bounds rather than as a fixed-size marker, so
+     * the highlight always matches whatever was painted. Blending is enabled explicitly:
+     * ShapeRenderer does not manage it, and without this the 50% alpha would silently
+     * render as solid yellow wherever a previous SpriteBatch had left blending disabled.
+     */
+    private void renderTerminalGlow(ShapeRenderer shape, OrthographicCamera camera) {
+        Gdx.gl.glEnable(GL20.GL_BLEND);
+        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
+
         shape.setProjectionMatrix(camera.combined);
         shape.begin(ShapeRenderer.ShapeType.Filled);
-        shape.setColor(0f, 0.9f, 1f, 0.85f);
-        for (float[] spot : getTerminalSpotsP1()) drawTerminalMarker(shape, spot);
-        for (float[] spot : getTerminalSpotsP2()) drawTerminalMarker(shape, spot);
+        shape.setColor(GLOW_R, GLOW_G, GLOW_B, GLOW_ALPHA);
+        for (Rectangle zone : terminalZonesP1) shape.rect(zone.x, zone.y, zone.width, zone.height);
+        for (Rectangle zone : terminalZonesP2) shape.rect(zone.x, zone.y, zone.width, zone.height);
         shape.end();
+
+        // A solid outline at full alpha keeps the edge crisp — a 50% fill alone reads as
+        // a vague smear against the lit floor underneath.
+        shape.begin(ShapeRenderer.ShapeType.Line);
+        shape.setColor(GLOW_R, GLOW_G, GLOW_B, 1f);
+        for (Rectangle zone : terminalZonesP1) shape.rect(zone.x, zone.y, zone.width, zone.height);
+        for (Rectangle zone : terminalZonesP2) shape.rect(zone.x, zone.y, zone.width, zone.height);
+        shape.end();
+
+        Gdx.gl.glDisable(GL20.GL_BLEND);
     }
 
     /**
@@ -242,36 +254,22 @@ public class Level1Map implements Collidable {
         shape.end();
     }
 
-    private void drawTerminalMarker(ShapeRenderer shape, float[] spot) {
-        float centerX = spot[0] + 50f;
-        float centerY = spot[1] + 50f;
-        shape.circle(centerX, centerY, 22f, 24);
-    }
-
     /**
-     * Draws every collision rectangle currently in use — green for floor (walkable),
-     * orange for gates, magenta for the center chamber — so the actual collision
-     * geometry can be compared directly against the art instead of guessing.
+     * Overlays the collision mask itself on the world, so painted surfaces can be
+     * compared directly against the art. Replaces the old rectangle outlines, which no
+     * longer exist — what you see here is exactly what collides() reads.
      */
-    public void renderDebugCollision(ShapeRenderer shape, OrthographicCamera camera) {
-        shape.setProjectionMatrix(camera.combined);
-        shape.begin(ShapeRenderer.ShapeType.Line);
-
-        shape.setColor(0f, 1f, 0f, 1f);
-        for (Rectangle r : floorP1) shape.rect(r.x, r.y, r.width, r.height);
-        for (Rectangle r : floorP2) shape.rect(r.x, r.y, r.width, r.height);
-
-        shape.setColor(1f, 0.6f, 0f, 1f);
-        shape.rect(gateP1.x, gateP1.y, gateP1.width, gateP1.height);
-        shape.rect(gateP2.x, gateP2.y, gateP2.width, gateP2.height);
-
-        shape.setColor(1f, 0f, 1f, 1f);
-        shape.rect(centerChamber.x, centerChamber.y, centerChamber.width, centerChamber.height);
-
-        shape.end();
+    public void renderDebugCollision(SpriteBatch batch, OrthographicCamera camera) {
+        batch.setProjectionMatrix(camera.combined);
+        batch.begin();
+        batch.setColor(1f, 1f, 1f, 0.5f);
+        batch.draw(mask.getDebugTexture(), 0, 0, WORLD_W, WORLD_H);
+        batch.setColor(1f, 1f, 1f, 1f);
+        batch.end();
     }
 
     public void dispose() {
         background.dispose();
+        mask.dispose();
     }
 }

@@ -13,7 +13,14 @@ public class Lwjgl3Launcher {
 
         String mode = argValue(args, "--mode=");
         String ip = argValue(args, "--ip=");
-        launch(mode, ip);
+        launch(mode, ip, hasFlag(args, "--windowed"));
+    }
+
+    private static boolean hasFlag(String[] args, String flag) {
+        for (String arg : args) {
+            if (arg.equals(flag)) return true;
+        }
+        return false;
     }
 
     private static String argValue(String[] args, String prefix) {
@@ -30,10 +37,23 @@ public class Lwjgl3Launcher {
      * normal LobbyScreen entry point.
      */
     public static void launch(String mode, String ip) {
-        new Lwjgl3Application(new Main(mode, ip), getDefaultConfiguration());
+        launch(mode, ip, false);
     }
 
-    private static Lwjgl3ApplicationConfiguration getDefaultConfiguration() {
+    /**
+     * windowed=true opens a normal decorated, resizable window instead of the borderless
+     * full-display one. Added for projector setup: the default window is undecorated and
+     * sized to whichever display was primary at startup, so if the projector is a
+     * secondary display the game appears on the laptop screen and cannot be dragged
+     * across. A decorated window can be moved and resized onto the projector, and
+     * Level1Screen re-derives both its UI and world cameras on every resize, so the
+     * layout follows it. Default is unchanged.
+     */
+    public static void launch(String mode, String ip, boolean windowed) {
+        new Lwjgl3Application(new Main(mode, ip), getDefaultConfiguration(windowed));
+    }
+
+    private static Lwjgl3ApplicationConfiguration getDefaultConfiguration(boolean windowed) {
         Lwjgl3ApplicationConfiguration configuration = new Lwjgl3ApplicationConfiguration();
         configuration.setTitle("firstJava");
         //// Vsync limits the frames per second to what your hardware can display, and helps eliminate
@@ -49,8 +69,15 @@ public class Lwjgl3Launcher {
         // Borderless window sized to the full display, not exclusive fullscreen — exclusive
         // fullscreen was blocking Alt+Tab from reliably switching away from the game.
         Graphics.DisplayMode display = Lwjgl3ApplicationConfiguration.getDisplayMode();
-        configuration.setWindowedMode(display.width, display.height);
-        configuration.setDecorated(false);
+        if (windowed) {
+            // 16:9 at a size that fits comfortably on a laptop panel, so the window can be
+            // dragged onto a projector and resized there during setup.
+            configuration.setWindowedMode(1280, 720);
+            configuration.setDecorated(true);
+        } else {
+            configuration.setWindowedMode(display.width, display.height);
+            configuration.setDecorated(false);
+        }
         //// You can change these files; they are in lwjgl3/src/main/resources/ .
         //// They can also be loaded from the root of assets/ .
         configuration.setWindowIcon("libgdx128.png", "libgdx64.png", "libgdx32.png", "libgdx16.png");

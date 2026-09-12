@@ -6,8 +6,6 @@ import java.util.List;
 import java.util.Queue;
 import java.util.Random;
 
-import io.github.fableops.Collidable;
-import io.github.fableops.Player;
 
 /**
  * Tracks and updates both players' enemy swarms. Enemies never auto-despawn on
@@ -18,6 +16,19 @@ public class SwarmController {
     private static final int MAX_SPAWN_PER_WAVE = 6;
     private static final float INITIAL_SPAWN_DELAY_SECONDS = 0.15f;
     private static final float SPAWN_INTERVAL_SECONDS = 0.35f;
+
+    private static final float TAU = (float) (Math.PI * 2.0);
+    /** Far enough out that a wave never appears already touching the player. */
+    private static final float MIN_SPAWN_RADIUS = 170f;
+    private static final float SPAWN_RING_STEP = 60f;
+    private static final int SPAWN_RINGS = 8;      // reaches ~590 units out
+    private static final int SAMPLES_PER_RING = 12;
+    /** Reused by findSpawnPoint() so queueing a wave allocates nothing. */
+    private final float[] spawnProbe = new float[2];
+
+    /** Enemies this close to each other get pushed apart so a swarm doesn't stack into one body. */
+    private static final float SEPARATION_DISTANCE = Enemy.SIZE * 0.8f;
+    private static final float SEPARATION_STRENGTH = 40f;
 
     private final List<Enemy> enemiesP1 = new ArrayList<>();
     private final List<Enemy> enemiesP2 = new ArrayList<>();
@@ -46,11 +57,16 @@ public class SwarmController {
 
     /**
      * Queues a wave in the offending player's own room, scattered around their position.
-     * Each candidate point is checked against the world so enemies never land outside the
-     * walkable floor or inside a wall; if every attempt fails, it falls back to spawning
-     * right on the player (always valid, since they're standing there). Enemies are queued
-     * rather than created immediately — update() releases them one at a time so a wave
-     * doesn't all appear on the same frame.
+     *
+     * Placement searches outward in rings rather than firing random shots into a fixed
+     * 150-300 band: in a corridor most of that band is solid wall, so the old eight
+     * attempts routinely all failed and fell back to spawning the enemy *directly on the
+     * player* — which meant an instant, unavoidable hit from a body already inside them.
+     * Rings guarantee the nearest legal standing room is found instead, and the innermost
+     * ring starts far enough out that a wave never materialises on top of anyone.
+     *
+     * Enemies are queued rather than created immediately — update() releases them one at a
+     * time so a wave doesn't all appear on the same frame.
      */
     public void spawnWave(int offendingPlayerId, float aroundX, float aroundY, Collidable world) {
         int mistakeCount = (offendingPlayerId == 1) ? ++mistakesP1 : ++mistakesP2;
@@ -58,19 +74,12 @@ public class SwarmController {
         boolean queueWasEmpty = pendingSpawns.isEmpty();
 
         for (int i = 0; i < spawnCount; i++) {
-            float spawnX = aroundX, spawnY = aroundY;
-            for (int attempt = 0; attempt < 8; attempt++) {
-                float angle = random.nextFloat() * (float) Math.PI * 2f;
-                float radius = 150f + random.nextFloat() * 150f;
-                float tryX = aroundX + (float) Math.cos(angle) * radius;
-                float tryY = aroundY + (float) Math.sin(angle) * radius;
-                if (!world.collides(tryX, tryY, Enemy.SIZE, Enemy.SIZE, offendingPlayerId)) {
-                    spawnX = tryX;
-                    spawnY = tryY;
-                    break;
-                }
+            if (findSpawnPoint(aroundX, aroundY, offendingPlayerId, world, spawnProbe)) {
+                pendingSpawns.offer(new PendingSpawn(offendingPlayerId, spawnProbe[0], spawnProbe[1]));
             }
-            pendingSpawns.offer(new PendingSpawn(offendingPlayerId, spawnX, spawnY));
+            // No legal spot anywhere in range: drop this enemy rather than spawn it inside
+            // a wall or inside the player. A smaller wave is a far smaller problem than one
+            // that cannot be fought or escaped.
         }
 
         // A wave already in flight keeps its own countdown running — appending more
@@ -78,6 +87,32 @@ public class SwarmController {
         if (queueWasEmpty) {
             spawnCountdown = INITIAL_SPAWN_DELAY_SECONDS;
         }
+    }
+
+    /**
+     * Finds the nearest walkable spot around a point, searching outward ring by ring.
+     * Each ring is sampled at evenly spaced angles from a random offset, so the result is
+     * varied between waves without leaving gaps the way pure random sampling does.
+     *
+     * @param out receives x,y on success — reused, so it must be read before the next call
+     * @return false when no ring held a legal spot, which means don't spawn at all
+     */
+    private boolean findSpawnPoint(float aroundX, float aroundY, int side, Collidable world, float[] out) {
+        for (int ring = 0; ring < SPAWN_RINGS; ring++) {
+            float radius = MIN_SPAWN_RADIUS + ring * SPAWN_RING_STEP;
+            float offset = random.nextFloat() * TAU;
+            for (int i = 0; i < SAMPLES_PER_RING; i++) {
+                float angle = offset + i * (TAU / SAMPLES_PER_RING);
+                float tryX = aroundX + (float) Math.cos(angle) * radius;
+                float tryY = aroundY + (float) Math.sin(angle) * radius;
+                if (!world.collides(tryX, tryY, Enemy.SIZE, Enemy.SIZE, side)) {
+                    out[0] = tryX;
+                    out[1] = tryY;
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     public void update(float delta, Player player1, Player player2, Collidable world) {
@@ -108,7 +143,47 @@ public class SwarmController {
     /** Advances one side and clears out enemies whose death animation has played out. */
     private void updateSide(List<Enemy> list, float delta, Player target, Collidable world) {
         for (Enemy e : list) e.update(delta, target, world);
+        separate(list, delta, world);
         list.removeIf(Enemy::isFinished);
+    }
+
+    /**
+     * Pushes overlapping enemies apart.
+     *
+     * Every enemy steers at the same target with the same speed, so without this they
+     * converge onto one point and the whole wave renders as a single smeared sprite that
+     * the player can kill with one swing. O(n^2), which is fine at these counts — a wave
+     * caps at 6 and the whole side rarely exceeds a couple of dozen.
+     */
+    private void separate(List<Enemy> list, float delta, Collidable world) {
+        for (int i = 0; i < list.size(); i++) {
+            Enemy a = list.get(i);
+            if (!a.isActive()) continue;
+            for (int j = i + 1; j < list.size(); j++) {
+                Enemy b = list.get(j);
+                if (!b.isActive()) continue;
+
+                float dx = b.x - a.x;
+                float dy = b.y - a.y;
+                float distSq = dx * dx + dy * dy;
+                if (distSq >= SEPARATION_DISTANCE * SEPARATION_DISTANCE) continue;
+
+                // Exactly coincident (two spawns landing on the same point) has no
+                // direction to push along, so nudge along a fixed axis to break the tie.
+                float dist = (float) Math.sqrt(distSq);
+                float nx, ny;
+                if (dist < 0.001f) {
+                    nx = 1f;
+                    ny = 0f;
+                } else {
+                    nx = dx / dist;
+                    ny = dy / dist;
+                }
+                float push = SEPARATION_STRENGTH * delta;
+                a.nudge(-nx * push, -ny * push, world);
+                b.nudge(nx * push, ny * push, world);
+            }
+        }
     }
 
     /** Attacks the nearest living enemy on the given side within range. */
