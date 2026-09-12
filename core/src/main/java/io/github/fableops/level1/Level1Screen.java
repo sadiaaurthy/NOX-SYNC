@@ -1,5 +1,8 @@
 package io.github.fableops.level1;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.Screen;
@@ -12,9 +15,6 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.utils.Align;
-
-import java.util.ArrayList;
-import java.util.List;
 
 import io.github.fableops.Enemy;
 import io.github.fableops.EnemySprites;
@@ -31,6 +31,8 @@ import io.github.fableops.level1.network.AlertMeterUpdateMessage;
 import io.github.fableops.level1.network.CodeFragmentPayload;
 import io.github.fableops.level1.network.EnemyStateMessage;
 import io.github.fableops.level1.network.EnteredDigitMessage;
+import io.github.fableops.level1.network.Level2StartMessage;
+import io.github.fableops.level2.Level2Screen;
 import io.github.fableops.network.GameClient;
 import io.github.fableops.network.GameServer;
 import io.github.fableops.network.PlayerInput;
@@ -119,6 +121,7 @@ public class Level1Screen implements Screen {
     private boolean missionFailed = false;
     private String missionFailedReason = "";
     private boolean returnedToMenu = false; // guards returnToMainMenu() against running twice
+    private boolean level1Advancing = false; // guards advanceToLevel2() against running twice
     private boolean disposed = false;       // guards dispose() against running twice
     // Recomputed every frame so the plate glow and the completion check agree.
     private boolean plateP1Held = false;
@@ -238,10 +241,10 @@ public class Level1Screen implements Screen {
             world, CAM_W, CAM_H, 2
         );
 
-        // hackerspritesheet.png continues the existing "Hacker" naming for P2;
-        // brawlspritesheet.png takes the remaining slot for P1.
+        // Both players currently use brawlspritesheet.png.
+        // Separate player sprites can be introduced later if required.
         player1.setTexture("brawlspritesheet.png");
-        player2.setTexture("hackerspritesheet.png");
+        player2.setTexture("brawlspritesheet.png");
 
         // L also moves P2 right, alongside the right arrow. Only has any effect in Debug
         // mode, since that's the only mode where P2 reads this keyboard (host polls arrow
@@ -286,6 +289,27 @@ public class Level1Screen implements Screen {
         popupP2.close();
         game.setScreen(new LobbyScreen(game));
         dispose();
+    }
+
+    /**
+     * The single path from Level 1 into Level 2 — reached once both plates are held and
+     * the completion banner is acknowledged. Host/debug is authoritative and tells a
+     * joined client to follow via LEVEL2_START (see setupClientPuzzle()); the client
+     * never advances on its own ESC. Hands the *same live* server/client/hostSession/
+     * clientSession into Level2Screen rather than opening new connections — see
+     * disposeLocalResources(), which is what makes that safe (full dispose() would stop
+     * them). Guarded the same way returnToMainMenu() is.
+     */
+    private void advanceToLevel2() {
+        if (level1Advancing || returnedToMenu) return;
+        level1Advancing = true;
+        popupP1.close();
+        popupP2.close();
+        if (isHost && hostSession != null) hostSession.send(new Level2StartMessage());
+        Level2Screen next = new Level2Screen(game, server, client, hostSession, clientSession);
+        disposed = true; // local resources are about to be freed; network handles are not
+        disposeLocalResources();
+        game.setScreen(next);
     }
 
     private void setupHostPuzzle() {
@@ -405,6 +429,11 @@ public class Level1Screen implements Screen {
                     resultsShown = false;
                     resultsHandledExternally = false;
                     missionFailedReason = "";
+                    break;
+                case "LEVEL2_START":
+                    // Constructs Level2Screen (Textures/SpriteBatch — GL work), so this must
+                    // run on the render thread, not this session's own listener thread.
+                    Gdx.app.postRunnable(this::advanceToLevel2);
                     break;
                 case "DIGIT_ACCEPTED":
                     // no extra feedback yet
@@ -527,7 +556,16 @@ public class Level1Screen implements Screen {
                 if (isHost) controller.restartLevel1();
                 else if (isDebug) debugController.restartLevel1();
             }
-        } else if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !uiPanelOpen) {
+        } else if (level1Complete) {
+            // Host/debug controls progression. Client waits for LEVEL2_START message.
+            if ((isHost || isDebug)
+                    && Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)
+                    && !uiPanelOpen) {
+                advanceToLevel2();
+                return;
+            }
+        } else if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)
+                && !uiPanelOpen) {
             Gdx.app.exit();
         }
         if (Gdx.input.isKeyJustPressed(Input.Keys.F1)) debugCollisionVisible = !debugCollisionVisible;
@@ -1110,7 +1148,9 @@ public class Level1Screen implements Screen {
     private void drawLevelCompleteBanner() {
         drawBanner("// REACTOR SECURED", "LEVEL 1 COMPLETE", COLOR_CYAN,
             "Both plates held. The exit gate is open.",
-            "Press ESC to exit.");
+            (isHost || isDebug)
+                ? "Press ESC to continue to Level 2."
+                : "Waiting for host to continue...");
     }
 
     private void drawMissionFailedBanner() {
@@ -1202,6 +1242,20 @@ public class Level1Screen implements Screen {
     public void dispose() {
         if (disposed) return;
         disposed = true;
+        disposeLocalResources();
+        if (server != null) server.stop();
+        if (client != null) client.stop();
+        if (hostSession != null) hostSession.stop();
+        if (clientSession != null) clientSession.stop();
+    }
+
+    /**
+     * Releases this screen's own local GPU/UI resources only — never touches the live
+     * network connections. Split out of dispose() so advanceToLevel2() can tear this
+     * screen down without stopping the server/client/session objects it just handed to
+     * Level2Screen.
+     */
+    private void disposeLocalResources() {
         batch.dispose();
         shape.dispose();
         font.dispose();
@@ -1214,9 +1268,5 @@ public class Level1Screen implements Screen {
         enemySprites.dispose();
         bannerFont.dispose();
         subFont.dispose();
-        if (server != null) server.stop();
-        if (client != null) client.stop();
-        if (hostSession != null) hostSession.stop();
-        if (clientSession != null) clientSession.stop();
     }
 }
