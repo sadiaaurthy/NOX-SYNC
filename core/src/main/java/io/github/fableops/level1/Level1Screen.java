@@ -46,7 +46,6 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
 
     private static final float ATTACK_RANGE = 120f;
     private static final int ATTACK_DAMAGE = 15;
-    private static final float ATTACK_COOLDOWN = 0.35f;
     private static final int CONTACT_DAMAGE = 10; // per second of contact
     // Enemy updates are sent 20 times a second, not every frame
     private static final float ENEMY_STATE_INTERVAL = 1f / 20f;
@@ -101,8 +100,6 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
     private boolean advancing = false; // guards advanceToLevel2() against running twice
     private boolean disposed = false;
 
-    private float attackCooldownP1 = 0f;
-    private float attackCooldownP2 = 0f;
     private float enemyStateTimer = 0f;
     // Client only: the host's swarm as last reported.
     private final List<float[]> remoteEnemiesP1 = new ArrayList<>();
@@ -124,10 +121,10 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
 
         float[] spawnP1 = world.getSpawnP1();
         float[] spawnP2 = world.getSpawnP2();
-        player1 = new Player("brawlspritesheet.png", spawnP1[0], spawnP1[1],
+        player1 = new Player("brawlspritesheet.png", "brawlspritesheetAttacking.png", spawnP1[0], spawnP1[1],
             Input.Keys.W, Input.Keys.S, Input.Keys.A, Input.Keys.D, world, 1);
         // Arrow keys are only used in debug, a real client sends its own WASD
-        player2 = new Player("hackerspritesheet.png", spawnP2[0], spawnP2[1],
+        player2 = new Player("hackerspritesheet.png", "hackerspritesheetAttacking.png", spawnP2[0], spawnP2[1],
             Input.Keys.UP, Input.Keys.DOWN, Input.Keys.LEFT, Input.Keys.RIGHT, world, 2);
         player2.setAlternateRightKey(Input.Keys.L);
         SplitScreen.fitCameras(player1, player2);
@@ -250,8 +247,6 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         swarm.reset();
         remoteEnemiesP1.clear();
         remoteEnemiesP2.clear();
-        attackCooldownP1 = 0f;
-        attackCooldownP2 = 0f;
         setAlertMeter(0);
         missionFailed = false;
         missionFailedReason = "";
@@ -336,12 +331,11 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         if (player1.colliderOverlaps(gate) && player2.colliderOverlaps(gate)) advanceToLevel2();
     }
 
-    // Returns the new cooldown
-    private float resolveAttack(int side, Player player, boolean attacking, float cooldown) {
-        if (!attacking || cooldown > 0f) return Math.max(0f, cooldown);
-        player.triggerAttackVisual();
-        swarm.attackNearest(side, player.centreX(), player.centreY(), ATTACK_RANGE, ATTACK_DAMAGE);
-        return ATTACK_COOLDOWN;
+    // Only hits when a new swing starts, so holding the key hits once per animation
+    private void attack(int side, Player player, boolean pressed) {
+        if (pressed && player.startAttack()) {
+            swarm.attackNearest(side, player.centreX(), player.centreY(), ATTACK_RANGE, ATTACK_DAMAGE);
+        }
     }
 
     private void updateSwarm(float delta) {
@@ -376,10 +370,8 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         boolean p2Free = !missionFailed && !popupP2.isOpen() && !inventories.isOpen(2);
         if (p1Free) player1.update(delta);
         if (p2Free) player2.update(delta);
-        attackCooldownP1 = resolveAttack(1, player1,
-            p1Free && Gdx.input.isKeyPressed(Input.Keys.F), attackCooldownP1 - delta);
-        attackCooldownP2 = resolveAttack(2, player2,
-            p2Free && Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT), attackCooldownP2 - delta);
+        attack(1, player1, p1Free && Gdx.input.isKeyPressed(Input.Keys.F));
+        attack(2, player2, p2Free && Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT));
     }
 
     private void updateAsHost(float delta) {
@@ -397,10 +389,9 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
                 Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT));
         if (!missionFailed) player2.applyInput(p2Input, delta);
 
-        attackCooldownP1 = resolveAttack(1, player1,
-            p1Free && Gdx.input.isKeyPressed(Input.Keys.F), attackCooldownP1 - delta);
-        attackCooldownP2 = resolveAttack(2, player2, !missionFailed && p2Input.attack, attackCooldownP2 - delta);
-        server.pushState(new WorldState(player1.x, player1.y, player2.x, player2.y));
+        attack(1, player1, p1Free && Gdx.input.isKeyPressed(Input.Keys.F));
+        attack(2, player2, !missionFailed && p2Input.attack);
+        server.pushState(new WorldState(player1, player2));
     }
 
     private void updateAsClient(float delta) {
@@ -415,13 +406,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
                 Gdx.input.isKeyPressed(Input.Keys.F))
             : new PlayerInput(false, false, false, false));
 
-        WorldState state = client.pollState();
-        player1.x = state.p1x;
-        player1.y = state.p1y;
-        player2.x = state.p2x;
-        player2.y = state.p2y;
-        player1.updateCamera();
-        player2.updateCamera();
+        client.pollState().applyTo(player1, player2);
     }
 
     private void handlePuzzleInteraction() {

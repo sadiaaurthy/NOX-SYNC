@@ -123,7 +123,7 @@ public class InventoryUI {
         } else {
             int index = inventory.getSelectedIndex();
             InventoryItem outgoing = inventory.get(index);
-            if (outgoing == null) return;
+            if (outgoing == null || !outgoing.isShareable()) return;
             inventory.set(index, shared.put(outgoing));
         }
     }
@@ -144,7 +144,8 @@ public class InventoryUI {
         drawChrome(shape, panelX, panelY, uiWorldW, uiWorldH, accent);
         drawSlots(shape, panelX, panelY, inventory, accent);
         drawPortraitFrame(shape, panelX, panelY);
-        drawSharedSlot(shape, panelX, panelY, shared, accent);
+        drawSharedSlot(shape, panelX, panelY, accent);
+        drawIcons(batch, panelX, panelY, inventory, shared);
         drawText(batch, panelX, panelY, inventory, shared, player, accent);
         drawPortrait(batch, panelX, panelY, player);
 
@@ -189,32 +190,17 @@ public class InventoryUI {
 
     private void drawSlots(ShapeRenderer shape, float panelX, float panelY,
                            Inventory inventory, Color accent) {
-        float gridX = panelX + PAD;
-        float gridTop = contentTop(panelY);
-
         shape.begin(ShapeRenderer.ShapeType.Filled);
+        shape.setColor(SLOT_BG);
         for (int i = 0; i < Inventory.CAPACITY; i++) {
-            float sx = gridX + (i % Inventory.COLUMNS) * (SLOT + SLOT_GAP);
-            float sy = gridTop - (i / Inventory.COLUMNS + 1) * SLOT - (i / Inventory.COLUMNS) * SLOT_GAP;
-            shape.setColor(SLOT_BG);
-            shape.rect(sx, sy, SLOT, SLOT);
-
-            InventoryItem item = inventory.get(i);
-            if (item != null) {
-                // No item art yet, so items are coloured squares
-                Color c = item.getAccent();
-                shape.setColor(c.r, c.g, c.b, 1f);
-                shape.rect(sx + 16f, sy + 16f, SLOT - 32f, SLOT - 32f);
-                shape.setColor(0f, 0f, 0f, 1f);
-                shape.rect(sx + 26f, sy + 26f, SLOT - 52f, SLOT - 52f);
-            }
+            shape.rect(slotX(panelX, i), slotY(panelY, i), SLOT, SLOT);
         }
         shape.end();
 
         shape.begin(ShapeRenderer.ShapeType.Line);
         for (int i = 0; i < Inventory.CAPACITY; i++) {
-            float sx = gridX + (i % Inventory.COLUMNS) * (SLOT + SLOT_GAP);
-            float sy = gridTop - (i / Inventory.COLUMNS + 1) * SLOT - (i / Inventory.COLUMNS) * SLOT_GAP;
+            float sx = slotX(panelX, i);
+            float sy = slotY(panelY, i);
             boolean selected = (i == inventory.getSelectedIndex());
             shape.setColor(selected ? accent : SLOT_LINE);
             shape.rect(sx, sy, SLOT, SLOT);
@@ -232,23 +218,22 @@ public class InventoryUI {
 
     private static float sharedSlotY(float panelY) { return contentTop(panelY) - GRID_H + 10f; }
 
+    private static float sharedSlotX(float panelX) { return rightColumnX(panelX) + (rightColumnW() - SLOT) / 2f; }
+
+    private static float slotX(float panelX, int i) { return panelX + PAD + (i % Inventory.COLUMNS) * (SLOT + SLOT_GAP); }
+
+    private static float slotY(float panelY, int i) {
+        return contentTop(panelY) - (i / Inventory.COLUMNS + 1) * SLOT - (i / Inventory.COLUMNS) * SLOT_GAP;
+    }
+
     // Kept apart from the grid so it doesn't look like one of the player's own slots
-    private void drawSharedSlot(ShapeRenderer shape, float panelX, float panelY,
-                                SharedSlot shared, Color accent) {
-        float slotX = rightColumnX(panelX) + (rightColumnW() - SLOT) / 2f;
+    private void drawSharedSlot(ShapeRenderer shape, float panelX, float panelY, Color accent) {
+        float slotX = sharedSlotX(panelX);
         float slotY = sharedSlotY(panelY);
 
         shape.begin(ShapeRenderer.ShapeType.Filled);
         shape.setColor(SLOT_BG);
         shape.rect(slotX, slotY, SLOT, SLOT);
-        InventoryItem item = shared.get();
-        if (item != null) {
-            Color c = item.getAccent();
-            shape.setColor(c.r, c.g, c.b, 1f);
-            shape.rect(slotX + 16f, slotY + 16f, SLOT - 32f, SLOT - 32f);
-            shape.setColor(0f, 0f, 0f, 1f);
-            shape.rect(slotX + 26f, slotY + 26f, SLOT - 52f, SLOT - 52f);
-        }
         shape.end();
 
         shape.begin(ShapeRenderer.ShapeType.Line);
@@ -256,6 +241,20 @@ public class InventoryUI {
         shape.rect(slotX, slotY, SLOT, SLOT);
         if (sharedFocused) shape.rect(slotX + 3f, slotY + 3f, SLOT - 6f, SLOT - 6f);
         shape.end();
+    }
+
+    private void drawIcons(SpriteBatch batch, float panelX, float panelY, Inventory inventory, SharedSlot shared) {
+        batch.begin();
+        for (int i = 0; i < Inventory.CAPACITY; i++) {
+            drawIcon(batch, inventory.get(i), slotX(panelX, i), slotY(panelY, i));
+        }
+        drawIcon(batch, shared.get(), sharedSlotX(panelX), sharedSlotY(panelY));
+        batch.end();
+    }
+
+    // 46x46 in the middle of the slot, the same size as UnstableCore.png
+    private static void drawIcon(SpriteBatch batch, InventoryItem item, float slotX, float slotY) {
+        if (item != null) batch.draw(item.getIcon(), slotX + 16f, slotY + 16f, SLOT - 32f, SLOT - 32f);
     }
 
     private void drawPortraitFrame(ShapeRenderer shape, float panelX, float panelY) {
@@ -361,7 +360,7 @@ public class InventoryUI {
         font.setColor(DIM);
         font.draw(batch, "[TAB] SHARED", right - 200f, promptY);
         promptY -= 30f;
-        if (focused != null) {
+        if (focused != null && (sharedFocused || focused.isShareable())) {
             font.setColor(accent);
             font.draw(batch, sharedFocused ? "[R] TAKE" : "[R] PUT", right - 200f, promptY);
             promptY -= 30f;

@@ -35,7 +35,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     private final UiViewport ui = new UiViewport();
     private final PlayerInventories inventories = new PlayerInventories();
     private final Level2Map world = new Level2Map();
-    private final CoreObject core = new CoreObject();
+    private final CoreObject core = new CoreObject(inventories);
     private final Player player1;
     private final Player player2;
 
@@ -64,9 +64,9 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         font.getData().setScale(SplitScreen.HUD_FONT_SCALE);
         SplitScreen.smoothFont(font);
 
-        player1 = new Player("brawlspritesheet.png", 0f, 0f,
+        player1 = new Player("brawlspritesheet.png", "brawlspritesheetAttacking.png", 0f, 0f,
             Input.Keys.W, Input.Keys.S, Input.Keys.A, Input.Keys.D, world, 1);
-        player2 = new Player("hackerspritesheet.png", 0f, 0f,
+        player2 = new Player("hackerspritesheet.png", "hackerspritesheetAttacking.png", 0f, 0f,
             Input.Keys.UP, Input.Keys.DOWN, Input.Keys.LEFT, Input.Keys.RIGHT, world, 2);
         player2.setAlternateRightKey(Input.Keys.L);
         SplitScreen.fitCameras(player1, player2);
@@ -102,6 +102,8 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
 
         inventories.handleInput(isHost || isDebug, !isHost || isDebug, false, player1, player2);
         core.update(delta);
+        player1.updateVisualState(delta);
+        player2.updateVisualState(delta);
 
         if (isDebug) {
             updateAsDebug(delta);
@@ -120,41 +122,44 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     }
 
     // An open inventory freezes only its own player.
+    // Attacks have nothing to hit until Level 2 gets its enemies
     private void updateAsDebug(float delta) {
-        if (!inventories.isOpen(1)) player1.update(delta); // WASD
-        if (!inventories.isOpen(2)) player2.update(delta); // arrow keys
+        boolean p1Free = !inventories.isOpen(1);
+        boolean p2Free = !inventories.isOpen(2);
+        if (p1Free) player1.update(delta); // WASD
+        if (p2Free) player2.update(delta); // arrow keys
+        if (p1Free && Gdx.input.isKeyPressed(Input.Keys.F)) player1.startAttack();
+        if (p2Free && Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT)) player2.startAttack();
     }
 
     private void updateAsHost(float delta) {
-        if (!inventories.isOpen(1)) player1.update(delta);
+        boolean p1Free = !inventories.isOpen(1);
+        if (p1Free) player1.update(delta);
         PlayerInput p2Input = server.isClientConnected()
             ? server.pollClientInput()
             : new PlayerInput(
                 Gdx.input.isKeyPressed(Input.Keys.UP),
                 Gdx.input.isKeyPressed(Input.Keys.DOWN),
                 Gdx.input.isKeyPressed(Input.Keys.LEFT),
-                Gdx.input.isKeyPressed(Input.Keys.RIGHT));
+                Gdx.input.isKeyPressed(Input.Keys.RIGHT),
+                Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT));
         player2.applyInput(p2Input, delta);
-        server.pushState(new WorldState(player1.x, player1.y, player2.x, player2.y));
+        if (p1Free && Gdx.input.isKeyPressed(Input.Keys.F)) player1.startAttack();
+        if (p2Input.attack) player2.startAttack();
+        server.pushState(new WorldState(player1, player2));
     }
 
     private void updateAsClient(float delta) {
-        // The client is its own machine, so its player uses WASD.
+        // The client is its own machine, so its player uses WASD and F.
         client.pushInput(inventories.isOpen(2)
             ? new PlayerInput(false, false, false, false)
             : new PlayerInput(
                 Gdx.input.isKeyPressed(Input.Keys.W),
                 Gdx.input.isKeyPressed(Input.Keys.S),
                 Gdx.input.isKeyPressed(Input.Keys.A),
-                Gdx.input.isKeyPressed(Input.Keys.D)));
-
-        WorldState state = client.pollState();
-        player1.x = state.p1x;
-        player1.y = state.p1y;
-        player2.x = state.p2x;
-        player2.y = state.p2y;
-        player1.updateCamera();
-        player2.updateCamera();
+                Gdx.input.isKeyPressed(Input.Keys.D),
+                Gdx.input.isKeyPressed(Input.Keys.F)));
+        client.pollState().applyTo(player1, player2);
     }
 
     // E takes or places the core. The client only asks, the host decides
@@ -189,25 +194,15 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         drawCore(camera);
     }
 
-    // On the pedestal the core is part of the map image
+    // Only drawn in the socket: on the pedestal it's part of the map image, and while carried it's in the inventory
     private void drawCore(OrthographicCamera camera) {
-        float x, y;
-        if (core.getState() == CoreObject.State.CARRIED) {
-            Player carrier = (core.getCarrierId() == 1) ? player1 : player2;
-            x = carrier.centreX();
-            y = carrier.centreY();
-        } else if (core.getState() == CoreObject.State.IN_SOCKET) {
-            Rectangle socket = world.getSocketZone();
-            x = socket.x + socket.width / 2f;
-            y = socket.y + socket.height / 2f;
-        } else {
-            return;
-        }
+        if (core.getState() != CoreObject.State.IN_SOCKET) return;
+        Rectangle socket = world.getSocketZone();
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
         shape.setProjectionMatrix(camera.combined);
         shape.begin(ShapeRenderer.ShapeType.Filled);
-        core.draw(shape, x, y);
+        core.draw(shape, socket.x + socket.width / 2f, socket.y + socket.height / 2f);
         shape.end();
         Gdx.gl.glDisable(GL20.GL_BLEND);
     }
@@ -272,6 +267,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         player1.dispose();
         player2.dispose();
         world.dispose();
+        core.dispose();
         if (server != null) server.stop();
         if (client != null) client.stop();
         if (hostSession != null) hostSession.stop();

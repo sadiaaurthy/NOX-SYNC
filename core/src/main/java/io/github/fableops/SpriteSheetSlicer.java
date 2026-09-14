@@ -1,6 +1,7 @@
 package io.github.fableops;
 
 import com.badlogic.gdx.graphics.Pixmap;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -60,6 +61,47 @@ final class SpriteSheetSlicer {
             boundaries[i] = Math.round(i * length / (float) count);
         }
         return boundaries;
+    }
+
+    // Column cuts for one row. Two frames whose slashes touch come out as one wide run,
+    // so the widest run gets split at the grid line nearest its middle until there are enough
+    static int[] columnsInRow(Pixmap pixmap, int rowTop, int rowBottom, int frames) {
+        int width = pixmap.getWidth();
+        int[] grid = uniform(width, frames);
+        List<int[]> runs = runs(pixmap, true, rowTop, rowBottom, 0);
+        while (!runs.isEmpty() && runs.size() < frames) {
+            int widest = 0;
+            for (int i = 1; i < runs.size(); i++) {
+                if (runs.get(i)[1] - runs.get(i)[0] > runs.get(widest)[1] - runs.get(widest)[0]) widest = i;
+            }
+            int[] run = runs.get(widest);
+            int middle = (run[0] + run[1]) / 2;
+            int line = -1;
+            for (int i = 1; i < frames; i++) {
+                boolean inside = grid[i] > run[0] && grid[i] <= run[1];
+                if (inside && (line == -1 || Math.abs(grid[i] - middle) < Math.abs(line - middle))) line = grid[i];
+            }
+            if (line == -1) break;
+            runs.set(widest, new int[]{run[0], line - 1});
+            runs.add(widest + 1, new int[]{line, run[1]});
+        }
+        int[] cuts = midpoints(runs, width, frames);
+        return cuts != null ? cuts : grid;
+    }
+
+    // Visible area of one frame as {left, top, right, bottom}, relative to the frame
+    static int[] opaqueBounds(Pixmap pixmap, TextureRegion frame) {
+        int left = frame.getRegionWidth(), top = -1, right = -1, bottom = -1;
+        for (int py = 0; py < frame.getRegionHeight(); py++) {
+            for (int px = 0; px < frame.getRegionWidth(); px++) {
+                if (!isOpaque(pixmap, frame.getRegionX() + px, frame.getRegionY() + py)) continue;
+                if (top == -1) top = py;
+                bottom = py;
+                left = Math.min(left, px);
+                right = Math.max(right, px);
+            }
+        }
+        return new int[]{left, top, right, bottom};
     }
 
     private SpriteSheetSlicer() {}

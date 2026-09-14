@@ -34,6 +34,12 @@ public class Inventory {
         set(index, null);
     }
 
+    public void remove(InventoryItem item) {
+        for (int i = 0; i < CAPACITY; i++) {
+            if (slots[i] == item) slots[i] = null;
+        }
+    }
+
     public int count() {
         int n = 0;
         for (InventoryItem item : slots) {

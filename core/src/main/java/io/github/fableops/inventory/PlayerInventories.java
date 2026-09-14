@@ -29,6 +29,10 @@ public class PlayerInventories {
         uiP2 = new InventoryUI(font);
     }
 
+    public Inventory forPlayer(int side) {
+        return (side == 1) ? inventoryP1 : inventoryP2;
+    }
+
     public boolean isOpen(int side) {
         return (side == 1) ? uiP1.isOpen() : uiP2.isOpen();
     }
