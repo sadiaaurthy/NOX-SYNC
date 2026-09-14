@@ -5,24 +5,20 @@ import com.badlogic.gdx.Gdx;
 import io.github.fableops.level1.model.AlertMeter;
 import io.github.fableops.level1.model.StageData;
 import io.github.fableops.level1.network.AlertMeterUpdateMessage;
-import io.github.fableops.level1.network.DigitAcceptedMessage;
+import io.github.fableops.level1.network.CodeFragmentPayload;
 import io.github.fableops.level1.network.EnteredDigitMessage;
 import io.github.fableops.level1.network.LevelRestartMessage;
 import io.github.fableops.level1.network.ReactorUnlockMessage;
 import io.github.fableops.level1.network.WrongAnswerMessage;
+import io.github.fableops.network.messages.NetworkMessage;
 import io.github.fableops.network.session.HostSession;
 import io.github.fableops.network.session.MessageListener;
 
-/**
- * Host-authoritative Level 1 state machine (spec 5.6). Talks over the generic
- * HostSession/ClientSession channel when hostSession is provided (real host/client
- * play). hostSession may be null — used by Debug mode, which drives both players'
- * submissions locally with no network involved at all.
- */
+// Level 1 puzzle logic, run on the host. hostSession is null in debug mode
 public class Level1Controller {
     private static final int WRONG_ANSWER_ALERT_INCREASE = 15;
 
-    private final HostSession hostSession; // nullable — null in Debug mode
+    private final HostSession hostSession;
     private final Level1Listener listener;
     private final AlertMeter alertMeter = new AlertMeter();
 
@@ -34,14 +30,7 @@ public class Level1Controller {
         this.listener = listener;
     }
 
-    /**
-     * Wire this into hostSession.setListener(...) to route incoming client messages here.
-     * dispatch() runs on HostSession's own network-reader thread, but every gameplay
-     * mutation below (puzzle state, AlertMeter, SwarmController) is host-authoritative and
-     * only ever safe on the libGDX render thread — the same thread update()/reset() already
-     * run on. Deserializing here is pure parsing with no shared state, so it stays outside
-     * the post; only the actual handling is marshaled over.
-     */
+    // Client digits are handled on the render thread, not the network thread
     public MessageListener asMessageListener() {
         return (type, body) -> {
             if ("ENTERED_DIGIT".equals(type)) {
@@ -57,73 +46,65 @@ public class Level1Controller {
     }
 
     private void enterStage(int number) {
-        this.stageNumber = number;
-        this.stageData = StageGenerator.generate(number);
-
-        // Host's own player is player 1 and never goes over the socket; the client is player 2.
+        stageNumber = number;
+        stageData = StageGenerator.generate(number);
+        // The host plays Player 1 locally; Player 2's view goes to the client.
         listener.onLocalView(stageData.viewFor(1));
-        listener.onRemoteView(stageData.viewFor(2));
-        if (hostSession != null) hostSession.send(stageData.viewFor(2));
+        CodeFragmentPayload remoteView = stageData.viewFor(2);
+        listener.onRemoteView(remoteView);
+        send(remoteView);
     }
 
-    /** Entry point for the host's own local player submitting a digit. */
     public void submitFromLocalPlayer(int positionIndex, String guess) {
         handleEnteredDigit(new EnteredDigitMessage(positionIndex, guess, 1));
     }
 
-    /** Entry point for a digit received from the client (network) or locally (Debug mode). */
     public void handleEnteredDigit(EnteredDigitMessage message) {
-        boolean owned = stageData.isOwnedBy(message.getPositionIndex(), message.getPlayerId());
-        boolean correct = owned && stageData.correctValue(message.getPositionIndex()).equals(message.getGuess());
+        int position = message.getPositionIndex();
+        boolean correct = stageData.isOwnedBy(position, message.getPlayerId())
+            && stageData.correctValue(position).equals(message.getGuess());
 
         if (correct) {
-            stageData.markSolved(message.getPositionIndex());
-            listener.onDigitAccepted(message.getPositionIndex());
-            if (hostSession != null) hostSession.send(new DigitAcceptedMessage(message.getPositionIndex()));
-
-            if (stageData.allPositionsSolved()) {
-                if (stageNumber == 3) {
-                    alertMeter.reset();
-                    listener.onReactorUnlocked();
-                    if (hostSession != null) hostSession.send(new ReactorUnlockMessage());
-                } else {
-                    enterStage(stageNumber + 1);
-                }
-            }
-        } else {
-            alertMeter.increase(WRONG_ANSWER_ALERT_INCREASE);
-            listener.onAlertMeterChanged(alertMeter.getValue());
-            if (hostSession != null) hostSession.send(new AlertMeterUpdateMessage(alertMeter.getValue()));
-            // UI-sync only: tells every peer to close whatever terminal popup is open.
-            // Never used by the client to spawn enemies — SwarmController stays host/debug-only.
-            if (hostSession != null) hostSession.send(new WrongAnswerMessage(message.getPlayerId()));
-            listener.onWrongAnswer(message.getPlayerId());
-
-            if (alertMeter.isMax()) {
-                listener.onMissionFailed();
-            }
+            stageData.markSolved(position);
+            if (stageData.allPositionsSolved()) advance();
+            return;
         }
+        alertMeter.increase(WRONG_ANSWER_ALERT_INCREASE);
+        reportAlertMeter();
+        send(new WrongAnswerMessage());
+        listener.onWrongAnswer(message.getPlayerId());
+        if (alertMeter.isMax()) listener.onMissionFailed();
     }
 
-    /**
-     * Debug shortcut: marks the current stage solved and moves on, exactly as if every
-     * position had been entered correctly. Deliberately routed through the same
-     * advance/unlock path as a real solve so it can't drift from normal progression.
-     */
+    // Debug only (K key)
     public void skipCurrentStage() {
-        if (stageNumber == 3) {
-            alertMeter.reset();
-            listener.onReactorUnlocked();
-            if (hostSession != null) hostSession.send(new ReactorUnlockMessage());
-        } else {
-            enterStage(stageNumber + 1);
-        }
+        advance();
     }
 
-    /** Actually performs a restart — called once the player acknowledges the mission-failed banner. */
+    private void advance() {
+        if (stageNumber < 3) {
+            enterStage(stageNumber + 1);
+            return;
+        }
+        alertMeter.reset();
+        reportAlertMeter();
+        listener.onReactorUnlocked();
+        send(new ReactorUnlockMessage());
+    }
+
     public void restartLevel1() {
         listener.onLevelRestart();
-        if (hostSession != null) hostSession.send(new LevelRestartMessage());
+        send(new LevelRestartMessage());
         startLevel();
+        reportAlertMeter();
+    }
+
+    private void reportAlertMeter() {
+        listener.onAlertMeterChanged(alertMeter.getValue());
+        send(new AlertMeterUpdateMessage(alertMeter.getValue()));
+    }
+
+    private void send(NetworkMessage message) {
+        if (hostSession != null) hostSession.send(message);
     }
 }

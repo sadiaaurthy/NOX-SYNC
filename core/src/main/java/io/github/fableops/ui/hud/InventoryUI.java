@@ -4,7 +4,6 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
-import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
@@ -15,24 +14,11 @@ import io.github.fableops.inventory.Inventory;
 import io.github.fableops.inventory.InventoryItem;
 import io.github.fableops.inventory.SharedSlot;
 
-/**
- * The in-game inventory panel — one universal 5x5 grid, the carrying player drawn beside
- * it, opened with that player's own number key.
- *
- * Rendered over the opening player's split-screen half rather than the whole window, the
- * same way {@link CodePopupUI} is. A full-screen panel would blank out the partner's view
- * while enemies are still chasing them, which in a co-op game is a way to get someone
- * killed by the menu.
- *
- * Everything below is in the caller's virtual UI space (see Level1Screen's UI_REF_W/H), so
- * the panel holds its proportions on any resolution. Text uses the bitmap pixel font in
- * assets/pixel.fnt with a Nearest filter — the whole point of a bitmap font here is that
- * upscaling it keeps hard pixel edges instead of smearing them, which is what gives the
- * panel its look.
- */
+// Inventory panel: 5x5 grid, the player's portrait and the shared slot
+// Only drawn over the owner's half, so the other player can keep playing
 public class InventoryUI {
 
-    // Panel box, virtual units. Sized to sit comfortably inside one 960-wide half.
+    // UI units, fits inside one half
     private static final float PANEL_W = 820f;
     private static final float PANEL_H = 780f;
     private static final float PAD = 30f;
@@ -47,7 +33,7 @@ public class InventoryUI {
     private static final float LABEL_SCALE = 2.0f;
     private static final float BODY_SCALE = 1.8f;
 
-    // Same palette as Level1Screen and launcher.css, so the panel reads as one game.
+    // Colours from launcher.css
     private static final Color PANEL_BG   = new Color(0.039f, 0.043f, 0.047f, 0.98f);
     private static final Color INNER_LINE = new Color(0.141f, 0.133f, 0.125f, 1f);
     private static final Color SLOT_BG    = new Color(0.078f, 0.082f, 0.086f, 1f);
@@ -59,31 +45,28 @@ public class InventoryUI {
 
     private static final int HP_SEGMENTS = 10;
     private static final float HP_CRITICAL = 0.3f;
-    /** Reused by the health bar so a full inventory frame allocates nothing. */
+    // Reused every frame for the health bar
     private final StringBuilder healthBar = new StringBuilder(HP_SEGMENTS);
 
     private final BitmapFont font;
 
     private boolean open = false;
-    /** 1 = draw over the left half, 2 = the right half. Set when the panel opens. */
+    // 1 = left half, 2 = right half
     private int playerSide = 1;
-    /** Whether the cursor is on the shared slot rather than in the personal grid. */
     private boolean sharedFocused = false;
 
     // Right-hand column: portrait above, the shared slot beneath it.
     private static final float SHARED_BLOCK_H = 110f;
 
-    public InventoryUI() {
-        font = new BitmapFont(Gdx.files.internal("pixel.fnt"), false);
-        font.getRegion().getTexture().setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest);
-        font.setUseIntegerPositions(false);
+    // Owned by PlayerInventories
+    public InventoryUI(BitmapFont font) {
+        this.font = font;
     }
 
     public boolean isOpen() { return open; }
 
     public void close() { open = false; }
 
-    /** Opens over that player's half, or closes if it was already showing. */
     public void toggle(int playerSide) {
         if (open) {
             open = false;
@@ -91,22 +74,12 @@ public class InventoryUI {
         }
         this.playerSide = playerSide;
         this.open = true;
-        // Always reopen on the grid — leaving focus parked on the shared slot from last
-        // time makes the arrow keys look broken when the panel comes back up.
+        // Always reopen on the grid, not the shared slot
         this.sharedFocused = false;
     }
 
-    /**
-     * Cursor movement, and ESC to dismiss. Takes the movement keys of whichever player
-     * owns this panel: that player is frozen while it is open, so reusing their own
-     * movement keys costs nothing and needs no second key map to learn.
-     *
-     * Deliberately does NOT handle the open/close key. isKeyJustPressed() reports true for
-     * the whole frame rather than being consumed by the first reader, so when the caller
-     * toggled the panel open and this method then checked the same key, it saw that press
-     * too and closed the panel again before a single frame had drawn. Toggling has exactly
-     * one owner now — the caller.
-     */
+    // Uses the owner's movement keys, that player can't move while the panel is open
+    // The open/close key is handled by the caller, isKeyJustPressed stays true all frame
     public void handleInput(Inventory inventory, SharedSlot shared, Player owner,
                             int keyUp, int keyDown, int keyLeft, int keyRight) {
         if (!open) return;
@@ -115,9 +88,7 @@ public class InventoryUI {
             open = false;
             return;
         }
-        // TAB moves the cursor between the personal grid and the shared slot. A dedicated
-        // key rather than an extra grid cell, because the shared slot is not part of the
-        // 5x5 layout and arrowing into it from an arbitrary edge has no sensible geometry.
+        // TAB switches between the grid and the shared slot
         if (Gdx.input.isKeyJustPressed(Input.Keys.TAB)) sharedFocused = !sharedFocused;
 
         if (!sharedFocused) {
@@ -129,16 +100,11 @@ public class InventoryUI {
         }
 
         if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) use(inventory, shared, owner);
-        // R, not F: F is Player 1's attack, and in Debug only one player is frozen at a
-        // time, so a panel reading F would swap items every time the other player swung.
+        // R, not F, because F is player 1's attack
         if (Gdx.input.isKeyJustPressed(Input.Keys.R)) transfer(inventory, shared);
     }
 
-    /**
-     * Consumes the focused item if it does anything. A consumable is spent whether or not
-     * it was needed — no "already at full health" refusal, because silently doing nothing
-     * on a keypress reads as a broken button.
-     */
+    // Items are used up even at full health
     private void use(Inventory inventory, SharedSlot shared, Player owner) {
         InventoryItem item = sharedFocused ? shared.get() : inventory.getSelected();
         if (item == null || !item.isConsumable()) return;
@@ -147,19 +113,12 @@ public class InventoryUI {
         else inventory.remove(inventory.getSelectedIndex());
     }
 
-    /**
-     * Moves the focused item between this player's grid and the shared slot — the whole
-     * point of the shared slot being to hand things over.
-     *
-     * A swap rather than a move, so pushing into an occupied shared slot doesn't silently
-     * destroy whatever was already there. Pulling out into a full grid is refused instead,
-     * since there is nowhere for the displaced item to go.
-     */
+    // Swaps with the shared slot. Taking it out fails if the grid is full
     private void transfer(Inventory inventory, SharedSlot shared) {
         if (sharedFocused) {
             InventoryItem incoming = shared.get();
             if (incoming == null) return;
-            if (!inventory.add(incoming)) return; // grid full — leave it where it is
+            if (!inventory.add(incoming)) return; // grid is full
             shared.clear();
         } else {
             int index = inventory.getSelectedIndex();
@@ -169,11 +128,7 @@ public class InventoryUI {
         }
     }
 
-    /**
-     * @param accent    that player's colour — cyan for P1, magenta for P2
-     * @param uiWorldW  virtual width of the caller's UI space
-     * @param uiWorldH  virtual height of the caller's UI space
-     */
+    // accent is cyan for P1, magenta for P2
     public void render(ShapeRenderer shape, SpriteBatch batch, float uiWorldW, float uiWorldH,
                        Inventory inventory, SharedSlot shared, Player player, Color accent) {
         if (!open) return;
@@ -182,8 +137,7 @@ public class InventoryUI {
         float panelX = (playerSide == 1 ? 0f : halfW) + (halfW - PANEL_W) / 2f;
         float panelY = (uiWorldH - PANEL_H) / 2f;
 
-        // ShapeRenderer does not manage blending; without this the dimmed backdrop and the
-        // panel's own alpha render as solid blocks wherever a previous batch left it off.
+        // ShapeRenderer doesn't turn on blending by itself
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
 
@@ -197,7 +151,6 @@ public class InventoryUI {
         Gdx.gl.glDisable(GL20.GL_BLEND);
     }
 
-    /** Dimmed backdrop over this half, then the double-bordered panel box. */
     private void drawChrome(ShapeRenderer shape, float panelX, float panelY,
                             float uiWorldW, float uiWorldH, Color accent) {
         float halfW = uiWorldW / 2f;
@@ -207,7 +160,7 @@ public class InventoryUI {
         shape.setColor(0f, 0f, 0f, 0.55f);
         shape.rect(halfX, 0f, halfW, uiWorldH);
 
-        // Outer border is the player's accent, so a glance says whose panel this is.
+        // Border in the player's colour
         shape.setColor(accent.r, accent.g, accent.b, 1f);
         shape.rect(panelX - BORDER, panelY - BORDER, PANEL_W + 2 * BORDER, PANEL_H + 2 * BORDER);
         shape.setColor(PANEL_BG);
@@ -226,7 +179,7 @@ public class InventoryUI {
         shape.rect(panelX + PAD, dividerTop, PANEL_W - 2 * PAD, 3f);
         shape.rect(panelX + PAD, dividerBottom, PANEL_W - 2 * PAD, 3f);
 
-        // Two accent ticks beside the title — the same mark the launcher uses as its logo.
+        // Same two ticks as the launcher logo
         shape.setColor(accent.r, accent.g, accent.b, 1f);
         float tickY = panelY + PANEL_H - PAD - 30f;
         shape.rect(panelX + PAD, tickY, 7f, 26f);
@@ -248,8 +201,7 @@ public class InventoryUI {
 
             InventoryItem item = inventory.get(i);
             if (item != null) {
-                // Blocky stand-in icon: there is no item art yet, so an item reads as its
-                // accent colour here and is named in the detail strip below.
+                // No item art yet, so items are coloured squares
                 Color c = item.getAccent();
                 shape.setColor(c.r, c.g, c.b, 1f);
                 shape.rect(sx + 16f, sy + 16f, SLOT - 32f, SLOT - 32f);
@@ -266,28 +218,21 @@ public class InventoryUI {
             boolean selected = (i == inventory.getSelectedIndex());
             shape.setColor(selected ? accent : SLOT_LINE);
             shape.rect(sx, sy, SLOT, SLOT);
-            // The cursor gets a second inset outline so it stays obvious on a filled slot.
+            // Double outline for the cursor
             if (selected) shape.rect(sx + 3f, sy + 3f, SLOT - 6f, SLOT - 6f);
         }
         shape.end();
     }
 
-    /** Left edge and width of the right-hand column, shared by the portrait and the slot. */
     private static float rightColumnX(float panelX) { return panelX + PAD + GRID_W + 24f; }
 
     private static float rightColumnW() { return PANEL_W - 2 * PAD - GRID_W - 24f; }
 
-    /** Top of the grid, which the right-hand column aligns to. */
     private static float contentTop(float panelY) { return panelY + PANEL_H - PAD - 124f; }
 
-    /** Bottom edge of the shared slot — it sits level with the bottom row of the grid. */
     private static float sharedSlotY(float panelY) { return contentTop(panelY) - GRID_H + 10f; }
 
-    /**
-     * The shared slot, drawn under the portrait and set apart from the 5x5 grid on purpose
-     * — it is not one of this player's pockets, and putting it inside the grid would read
-     * as though it were.
-     */
+    // Kept apart from the grid so it doesn't look like one of the player's own slots
     private void drawSharedSlot(ShapeRenderer shape, float panelX, float panelY,
                                 SharedSlot shared, Color accent) {
         float slotX = rightColumnX(panelX) + (rightColumnW() - SLOT) / 2f;
@@ -339,8 +284,7 @@ public class InventoryUI {
         float boxTop = contentTop(panelY);
         float boxH = GRID_H - 74f - SHARED_BLOCK_H;
 
-        // Fit inside the box preserving the frame's own aspect, so the character is never
-        // stretched however the sheet's cells are proportioned.
+        // Keep the sprite's aspect ratio
         float inset = 18f;
         float maxW = boxW - 2 * inset;
         float maxH = boxH - 2 * inset;
@@ -372,8 +316,7 @@ public class InventoryUI {
         font.setColor(DIM);
         font.draw(batch, "[" + playerSide + "] CLOSE", right - 155f, titleY - 4f);
 
-        // Health, as a segmented bar — reads at a glance, and drawn with the font rather
-        // than ShapeRenderer so its blocks land on the same pixel rhythm as the glyphs.
+        // Health bar made of # characters
         float hpY = panelY + PANEL_H - PAD - 62f;
         font.setColor(DIM);
         font.draw(batch, "HP", left, hpY);
@@ -388,10 +331,6 @@ public class InventoryUI {
         font.setColor(TEXT);
         font.draw(batch, String.valueOf((int) Math.ceil(health)), left + 340f, hpY);
 
-        // "SHARED" sits directly above the shared slot, labelling it as the pair's, not
-        // this player's — the count below covers the personal grid only. Positioned off
-        // the slot itself rather than re-deriving the offset, which previously left about
-        // one unit of clearance between the text and the slot's top edge.
         float sharedLabelY = sharedSlotY(panelY) + SLOT + 32f;
         font.getData().setScale(BODY_SCALE);
         font.setColor(sharedFocused ? accent : DIM);
@@ -402,7 +341,6 @@ public class InventoryUI {
         font.draw(batch, inventory.count() + " / " + Inventory.CAPACITY, left + GRID_W - 90f,
             panelY + PAD + 142f);
 
-        // Detail strip follows the cursor, whichever side of TAB it is on.
         InventoryItem focused = sharedFocused ? shared.get() : inventory.getSelected();
         float detailY = panelY + PAD + 74f;
         font.getData().setScale(LABEL_SCALE);
@@ -418,8 +356,7 @@ public class InventoryUI {
                 : focused.getDescription(),
             left, detailY - 34f, PANEL_W - 2 * PAD - 220f, com.badlogic.gdx.utils.Align.left, true);
 
-        // Prompts only appear when the key would actually do something — a hint on an
-        // inert item or an empty slot is a lie the player only discovers by pressing it.
+        // Only show a key prompt when that key does something
         float promptY = detailY;
         font.setColor(DIM);
         font.draw(batch, "[TAB] SHARED", right - 200f, promptY);
@@ -435,9 +372,5 @@ public class InventoryUI {
         }
 
         batch.end();
-    }
-
-    public void dispose() {
-        font.dispose();
     }
 }

@@ -1,24 +1,22 @@
 plugins {
-  id "application"
-  id "org.openjfx.javafxplugin" version "0.1.0"
+  id 'application'
+  id 'org.openjfx.javafxplugin' version '0.1.0'
 }
 
-// Launcher (not LauncherApp) is the entry point on purpose — see Launcher.java.
-application.mainClass = 'io.github.fableops.launcher.Launcher'
-eclipse.project.name = appName + '-launcher'
+application {
+  // Launcher instead of LauncherApp, otherwise JavaFX says "runtime components are missing"
+  mainClass = 'io.github.fableops.launcher.Launcher'
+  // Small heap and serial GC for a faster start and less RAM
+  applicationDefaultJvmArgs = ['-XX:+UseSerialGC', '-XX:TieredStopAtLevel=1', '-Xms32m', '-Xmx256m',
+                               '--enable-native-access=ALL-UNNAMED']
+}
 
 javafx {
-  version = "21.0.2"
-  modules = ["javafx.controls", "javafx.fxml"]
+  version = '21.0.2'
+  modules = ['javafx.controls', 'javafx.fxml']
 }
 
 dependencies {
-  implementation project(':lwjgl3')
-  // Explicit: ':lwjgl3' depends on ':core' with `implementation`, which is not
-  // transitive at compile time, so the launcher needs its own view of core.
   implementation project(':core')
-}
-
-run {
-  jvmArgs += "--enable-native-access=ALL-UNNAMED"
+  implementation project(':lwjgl3')
 }

@@ -161,3 +161,37 @@
     -fx-font-size: 10px;
     -fx-text-fill: -fo-text-2;
 }
+
+/* ---- controls reference panel, beside the operations panel ---- */
+
+.controls-panel {
+    -fx-padding: 16 20 18 20;
+}
+
+.controls-col {
+    -fx-min-width: 226;
+}
+
+/* Section heading. Top padding separates it from the rows above without
+   needing a spacer node between every group. */
+.controls-head {
+    -fx-font-family: "Consolas", "Courier New", monospace;
+    -fx-font-size: 11px;
+    -fx-text-fill: -fo-orange;
+    -fx-padding: 8 0 2 0;
+}
+
+/* Fixed width so every description starts on the same vertical line — that
+   alignment is what makes a list this long scannable. */
+.controls-key {
+    -fx-font-family: "Consolas", "Courier New", monospace;
+    -fx-font-size: 11px;
+    -fx-text-fill: -fo-cyan;
+    -fx-min-width: 78;
+}
+
+.controls-desc {
+    -fx-font-family: "Segoe UI", sans-serif;
+    -fx-font-size: 11px;
+    -fx-text-fill: -fo-text-1;
+}

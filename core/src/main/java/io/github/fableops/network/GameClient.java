@@ -4,50 +4,47 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 
+// Movement channel, client side
 public class GameClient {
 
-    private Socket socket;
-    private PrintWriter out;
-    private BufferedReader in;
+    // Fail quickly on a wrong IP
+    public static final int CONNECT_TIMEOUT_MS = 5000;
+    private static final int PORT = 9090;
 
-    private volatile WorldState  latestState   = new WorldState();
-    private volatile PlayerInput pendingInput  = new PlayerInput();
-    private volatile boolean     running       = false;
+    private volatile Socket socket;
+    private volatile boolean stopped = false;
+    private volatile boolean running = false;
+
+    private volatile WorldState latestState = new WorldState();
+    private volatile PlayerInput pendingInput = new PlayerInput();
 
     public void connect(String hostIP) throws IOException {
-        socket = new Socket(hostIP, 9090);
-        socket.setTcpNoDelay(true);
-        System.out.println("Connected to " + hostIP);
-
-        out = new PrintWriter(socket.getOutputStream(), true);
-        in  = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-
+        Socket s = new Socket();
+        socket = s;
+        if (stopped) s.close(); // stop() was already called
+        s.connect(new InetSocketAddress(hostIP, PORT), CONNECT_TIMEOUT_MS);
+        s.setTcpNoDelay(true);
+        PrintWriter out = new PrintWriter(s.getOutputStream(), true);
+        BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream()));
         running = true;
 
         Thread networkThread = new Thread(() -> {
             while (running) {
                 try {
-                    // read state from host
                     if (in.ready()) {
                         String line = in.readLine();
-                        if (line != null) {
-                            latestState = WorldState.deserialize(line);
-                        }
+                        if (line != null) latestState = WorldState.deserialize(line);
                     }
-
-                    // send our input
                     out.println(pendingInput.serialize());
-
-                    Thread.sleep(8);
-
+                    Thread.sleep(GameServer.SEND_INTERVAL_MS);
                 } catch (Exception e) {
-                    System.out.println("Disconnected from host.");
                     running = false;
                 }
             }
-        });
+        }, "GameClient");
         networkThread.setDaemon(true);
         networkThread.start();
     }
@@ -60,14 +57,14 @@ public class GameClient {
         return latestState;
     }
 
-    public boolean isConnected() { return running; }
-
+    // Can be called while connect() is still running
     public void stop() {
+        stopped = true;
         running = false;
         try {
             if (socket != null) socket.close();
         } catch (IOException ignored) {
-            // Closing an already-closing socket during shutdown — benign.
+            // Already closing.
         }
     }
 }

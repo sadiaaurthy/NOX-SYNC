@@ -1,17 +1,6 @@
 package io.github.fableops.inventory;
 
-/**
- * One player's carried items — a fixed 5x5 grid, universal (no categories, no tabs).
- *
- * Each player owns their own instance; nothing is shared between them. The grid is a flat
- * array rather than a list because slot position is meaningful: an item stays where it was
- * put, and removing one leaves a hole rather than shuffling everything left under the
- * player's cursor.
- *
- * Purely model state — it draws nothing and reads no input. {@code selectedIndex} lives
- * here rather than in the UI so a player's cursor position survives closing and reopening
- * the panel.
- */
+// 5x5 grid as an array, so removing an item leaves a gap instead of shifting the others
 public class Inventory {
 
     public static final int COLUMNS = 5;
@@ -21,7 +10,6 @@ public class Inventory {
     private final InventoryItem[] slots = new InventoryItem[CAPACITY];
     private int selectedIndex = 0;
 
-    /** @return true if the item fit; false when every slot is occupied. */
     public boolean add(InventoryItem item) {
         for (int i = 0; i < CAPACITY; i++) {
             if (slots[i] == null) {
@@ -32,13 +20,11 @@ public class Inventory {
         return false;
     }
 
-    /** Places an item in a specific slot, replacing whatever was there. */
     public void set(int index, InventoryItem item) {
         if (index < 0 || index >= CAPACITY) return;
         slots[index] = item;
     }
 
-    /** @return the item in that slot, or null if empty or out of range. */
     public InventoryItem get(int index) {
         if (index < 0 || index >= CAPACITY) return null;
         return slots[index];
@@ -60,21 +46,10 @@ public class Inventory {
 
     public InventoryItem getSelected() { return get(selectedIndex); }
 
-    /**
-     * Moves the cursor by whole columns/rows, clamped at the edges rather than wrapping.
-     * Wrapping would teleport the cursor across the grid on a single keypress, which reads
-     * as a glitch when the player is holding a direction to scan along a row.
-     */
+    // Clamped at the edges, no wrap-around
     public void moveSelection(int dx, int dy) {
-        int col = selectedIndex % COLUMNS;
-        int row = selectedIndex / COLUMNS;
-        col = Math.max(0, Math.min(COLUMNS - 1, col + dx));
-        row = Math.max(0, Math.min(ROWS - 1, row + dy));
+        int col = Math.max(0, Math.min(COLUMNS - 1, selectedIndex % COLUMNS + dx));
+        int row = Math.max(0, Math.min(ROWS - 1, selectedIndex / COLUMNS + dy));
         selectedIndex = row * COLUMNS + col;
-    }
-
-    public void clear() {
-        for (int i = 0; i < CAPACITY; i++) slots[i] = null;
-        selectedIndex = 0;
     }
 }

@@ -6,10 +6,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+// What one player's terminal shows for the current stage
 public class CodeFragmentPayload extends NetworkMessage {
-    private int stageNumber;
-    private List<String> displayLines;
-    private List<Integer> ownedPositions;
+    private final int stageNumber;
+    private final List<String> displayLines;
+    private final List<Integer> ownedPositions;
 
     public CodeFragmentPayload(int stageNumber, List<String> displayLines, List<Integer> ownedPositions) {
         this.stageNumber = stageNumber;
@@ -18,43 +19,33 @@ public class CodeFragmentPayload extends NetworkMessage {
     }
 
     public int getStageNumber() { return stageNumber; }
-    public void setStageNumber(int stageNumber) { this.stageNumber = stageNumber; }
 
     public List<String> getDisplayLines() { return displayLines; }
-    public void setDisplayLines(List<String> displayLines) { this.displayLines = displayLines; }
 
     public List<Integer> getOwnedPositions() { return ownedPositions; }
-    public void setOwnedPositions(List<Integer> ownedPositions) { this.ownedPositions = ownedPositions; }
 
     @Override
     public String getType() { return "CODE_FRAGMENT"; }
 
     @Override
     public String serializeBody() {
-        String linesPart = String.join("~", displayLines);
-        StringBuilder positionsPart = new StringBuilder();
+        StringBuilder positions = new StringBuilder();
         for (int i = 0; i < ownedPositions.size(); i++) {
-            if (i > 0) positionsPart.append("~");
-            positionsPart.append(ownedPositions.get(i));
+            if (i > 0) positions.append('~');
+            positions.append(ownedPositions.get(i));
         }
-        return stageNumber + ";" + linesPart + ";" + positionsPart;
+        return stageNumber + ";" + String.join("~", displayLines) + ";" + positions;
     }
 
     public static CodeFragmentPayload deserialize(String body) {
         String[] parts = body.split(";", -1);
-        int stageNumber = Integer.parseInt(parts[0]);
-
         List<String> displayLines = parts[1].isEmpty()
-                ? new ArrayList<>()
-                : new ArrayList<>(Arrays.asList(parts[1].split("~")));
-
+            ? new ArrayList<>()
+            : new ArrayList<>(Arrays.asList(parts[1].split("~")));
         List<Integer> ownedPositions = new ArrayList<>();
-        if (parts.length > 2 && !parts[2].isEmpty()) {
-            for (String p : parts[2].split("~")) {
-                ownedPositions.add(Integer.parseInt(p));
-            }
+        if (!parts[2].isEmpty()) {
+            for (String p : parts[2].split("~")) ownedPositions.add(Integer.parseInt(p));
         }
-
-        return new CodeFragmentPayload(stageNumber, displayLines, ownedPositions);
+        return new CodeFragmentPayload(Integer.parseInt(parts[0]), displayLines, ownedPositions);
     }
 }

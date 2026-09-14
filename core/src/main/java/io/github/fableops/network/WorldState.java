@@ -13,7 +13,6 @@ public class WorldState {
         this.p2y = p2y;
     }
 
-    // serialize to simple comma-separated string — no object streams
     public String serialize() {
         return p1x + "," + p1y + "," + p2x + "," + p2y;
     }

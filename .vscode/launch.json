@@ -5,7 +5,8 @@
             "type": "java",
             "name": "Run FableOps",
             "request": "launch",
-            "mainClass": "io.github.fableops.launcher.Launcher"
+            "mainClass": "io.github.fableops.launcher.Launcher",
+            "vmArgs": "-XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Xms32m -Xmx256m --enable-native-access=ALL-UNNAMED"
         }
     ]
 }

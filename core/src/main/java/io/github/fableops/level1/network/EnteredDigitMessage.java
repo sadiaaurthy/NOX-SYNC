@@ -3,9 +3,9 @@ package io.github.fableops.level1.network;
 import io.github.fableops.network.messages.NetworkMessage;
 
 public class EnteredDigitMessage extends NetworkMessage {
-    private int positionIndex;
-    private String guess;
-    private int playerId;
+    private final int positionIndex;
+    private final String guess;
+    private final int playerId;
 
     public EnteredDigitMessage(int positionIndex, String guess, int playerId) {
         this.positionIndex = positionIndex;
@@ -14,13 +14,10 @@ public class EnteredDigitMessage extends NetworkMessage {
     }
 
     public int getPositionIndex() { return positionIndex; }
-    public void setPositionIndex(int positionIndex) { this.positionIndex = positionIndex; }
 
     public String getGuess() { return guess; }
-    public void setGuess(String guess) { this.guess = guess; }
 
     public int getPlayerId() { return playerId; }
-    public void setPlayerId(int playerId) { this.playerId = playerId; }
 
     @Override
     public String getType() { return "ENTERED_DIGIT"; }

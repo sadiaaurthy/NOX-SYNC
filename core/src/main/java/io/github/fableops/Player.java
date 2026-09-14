@@ -1,425 +1,245 @@
 package io.github.fableops;
 
 import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Pixmap;
-import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.Animation;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
-
-import java.util.ArrayList;
-import java.util.List;
+import com.badlogic.gdx.math.Rectangle;
 
 import io.github.fableops.network.PlayerInput;
 
+// x, y is the bottom-left of the feet hitbox, the sprite is drawn around it
 public class Player {
 
-    /** Row order in the sprite sheet: row 0 = down, 1 = up, 2 = left, 3 = right. */
+    // Same order as the rows in the sheet
     private enum Direction { DOWN, UP, LEFT, RIGHT }
 
     private static final int SHEET_COLUMNS = 8;
     private static final int SHEET_ROWS = 4;
-    private static final float FRAME_DURATION = 0.1f; // 8 frames * 0.1s = 0.8s per walk cycle
-    private static final int ALPHA_THRESHOLD = 20; // ignore faint anti-aliasing dust in gutters
+    private static final float FRAME_DURATION = 0.1f;
 
-    // ---- procedural combat visual feedback (walk sprites only — no dedicated frames) ----
-    private static final float ATTACK_VISUAL_DURATION = 0.18f; // seconds, within the 0.16-0.20 target
-    private static final float HURT_FLASH_DURATION = 0.18f;    // seconds, within the 0.15-0.22 target
-    private static final float HURT_TINT_STRENGTH = 0.65f;     // how far G/B channels drop at peak flash
-    private static final float ATTACK_LUNGE_DISTANCE = 10f;    // draw-offset only, world x/y never move
-    private static final float ATTACK_SCALE_AMOUNT = 0.06f;    // subtle +/-6% pulse at the peak of the lunge
+    private static final float SIZE = 100f;
+    private static final float SPEED = 220f;
+    public static final float MAX_HEALTH = 100f;
+    public static final float INTERACT_RANGE = 80f;
+
+    // Attack and hurt effects, drawn on the walk frames
+    private static final float ATTACK_VISUAL_DURATION = 0.18f;
+    private static final float HURT_FLASH_DURATION = 0.18f;
+    private static final float HURT_TINT_STRENGTH = 0.65f;   // how far green and blue drop at peak flash
+    private static final float ATTACK_LUNGE_DISTANCE = 10f;  // draw offset only; x and y never move
+    private static final float ATTACK_SCALE_AMOUNT = 0.06f;
     private static final float DEAD_ROTATION_DEGREES = 85f;
     private static final float DEAD_ALPHA = 0.65f;
 
     public float x, y;
-    /** Size of the sprite cell — the drawn height, and the box x/y are measured against. */
-    public static final float SIZE = 100f;
-
-    /**
-     * The physical collider, which is deliberately smaller than the drawn sprite.
-     *
-     * SIZE was previously used as both the draw size and the collision box, which made
-     * the player a 100x100 square. Measuring the sheets says that is simply wrong: across
-     * all 32 frames of both characters the widest pose is 63.0 units
-     * (brawlspritesheet, facing left) and hackerspritesheet peaks at 59.4 — so the old box
-     * was 59% wider than the art it was standing in for. That phantom width is what made
-     * the map's ~80-unit doorways impassable despite looking wide enough on screen.
-     *
-     * COLLIDER is square for the same reason Enemy is (SIZE 70 against DRAW_SIZE 120):
-     * this is a top-down map, so what collides is the character's footprint on the floor,
-     * not the full standing silhouette. A 92-unit-tall collider matching the body outline
-     * would mean a character's head blocked them from walking down a corridor, which is
-     * not how the level is drawn. 64 covers the widest pose exactly.
-     *
-     * Anchored at the bottom of the sprite and centred horizontally, so it sits on the
-     * feet — the sheets leave only 4-12 units of empty space below them.
-     */
-    public static final float COLLIDER = 64f;
-    private static final float COLLIDER_OFFSET_X = (SIZE - COLLIDER) / 2f;
-    private static final float COLLIDER_OFFSET_Y = 0f;
-
-    private static final float SPEED = 220f;
-    public static final float MAX_HEALTH = 100f;
     public float health = MAX_HEALTH;
+    public final OrthographicCamera camera = new OrthographicCamera();
 
-    private Texture spriteSheet;
-    private Animation<TextureRegion>[] walkAnimations; // indexed by Direction.ordinal()
+    private final Texture sheet;
+    private final Animation<TextureRegion>[] walk; // indexed by Direction.ordinal()
+    private final SpriteBounds bounds;
+    private final int keyUp, keyDown, keyLeft, keyRight;
+    // -1 means unset. It is checked explicitly because Input.Keys.ANY_KEY is also -1.
+    private int keyRightAlt = -1;
+    private final Collidable world;
+    private final int side;
+
+    private float camW, camH;
     private float stateTime = 0f;
     private Direction facing = Direction.DOWN;
-    private boolean isMoving = false;
-
-    // Visual-only timers — never affect x/y, collision, or camera. Death has no timer of
-    // its own; it's read directly off `health <= 0`, the same source of truth the rest of
-    // the game already uses, so it can never drift out of sync or need its own removal logic.
     private float attackVisualTimer = 0f;
     private float hurtVisualTimer = 0f;
 
-    public Color bodyColor;
-    public Color accentColor;
+    // The sheet is 8x4 with rows down, up, left, right
+    // side = which wing this player can walk in Level 1
+    @SuppressWarnings("unchecked")
+    public Player(String sheetFile, float x, float y, int keyUp, int keyDown, int keyLeft, int keyRight,
+                  Collidable world, int side) {
+        this.x = x;
+        this.y = y;
+        this.keyUp = keyUp;
+        this.keyDown = keyDown;
+        this.keyLeft = keyLeft;
+        this.keyRight = keyRight;
+        this.world = world;
+        this.side = side;
 
-    private int keyUp, keyDown, keyLeft, keyRight;
-    // Optional second key for "move right". -1 means unset, and it must be guarded
-    // explicitly rather than passed to isKeyPressed(), because Input.Keys.ANY_KEY is
-    // also -1 and would report true whenever any key at all is held.
-    private int keyRightAlt = -1;
-    public OrthographicCamera camera;
-    private Collidable world;
+        Pixmap pixmap = new Pixmap(Gdx.files.internal(sheetFile));
+        int[] columns = boundaries(pixmap, true, SHEET_COLUMNS);
+        int[] rows = boundaries(pixmap, false, SHEET_ROWS);
+        sheet = new Texture(pixmap);
 
-    // Not final: the screen owning this player re-derives them from the real viewport
-    // whenever the window resizes — see setCameraViewport(). They are also the clamp
-    // bounds in updateCamera(), so the two must always be changed together.
-    private float camW;
-    private float camH;
-    private final int side; // 1 = P1's own floor/gate, 2 = P2's — which side this player collides against
-
-    // full constructor — used for keyboard-controlled players (default zoom, side=1)
-    public Player(float startX, float startY,
-                  Color bodyColor, Color accentColor,
-                  int keyUp, int keyDown, int keyLeft, int keyRight,
-                  Collidable world) {
-        this(startX, startY, bodyColor, accentColor,
-             keyUp, keyDown, keyLeft, keyRight, world, 960f, 1080f, 1);
+        TextureRegion[] allFrames = new TextureRegion[SHEET_ROWS * SHEET_COLUMNS];
+        float[] scales = new float[allFrames.length];
+        walk = new Animation[SHEET_ROWS];
+        for (int row = 0; row < SHEET_ROWS; row++) {
+            TextureRegion[] frames = new TextureRegion[SHEET_COLUMNS];
+            for (int col = 0; col < SHEET_COLUMNS; col++) {
+                TextureRegion frame = new TextureRegion(sheet, columns[col], rows[row],
+                    columns[col + 1] - columns[col], rows[row + 1] - rows[row]);
+                frames[col] = frame;
+                allFrames[row * SHEET_COLUMNS + col] = frame;
+                scales[row * SHEET_COLUMNS + col] = SIZE / frame.getRegionHeight();
+            }
+            walk[row] = new Animation<>(FRAME_DURATION, frames);
+        }
+        bounds = new SpriteBounds(pixmap, allFrames, scales, SIZE);
+        pixmap.dispose();
     }
 
-    // full constructor — explicit camera zoom, default side=1
-    public Player(float startX, float startY,
-                  Color bodyColor, Color accentColor,
-                  int keyUp, int keyDown, int keyLeft, int keyRight,
-                  Collidable world, float camW, float camH) {
-        this(startX, startY, bodyColor, accentColor,
-             keyUp, keyDown, keyLeft, keyRight, world, camW, camH, 1);
+    // Cut at the gaps between frames, or an even grid if that doesn't work
+    private static int[] boundaries(Pixmap pixmap, boolean horizontal, int frames) {
+        int length = horizontal ? pixmap.getWidth() : pixmap.getHeight();
+        int across = horizontal ? pixmap.getHeight() : pixmap.getWidth();
+        int[] cuts = SpriteSheetSlicer.midpoints(
+            SpriteSheetSlicer.runs(pixmap, horizontal, 0, across, 0), length, frames);
+        return cuts != null ? cuts : SpriteSheetSlicer.uniform(length, frames);
     }
 
-    // full constructor — explicit camera zoom AND side (use this for Level1Screen's P1/P2)
-    public Player(float startX, float startY,
-                  Color bodyColor, Color accentColor,
-                  int keyUp, int keyDown, int keyLeft, int keyRight,
-                  Collidable world, float camW, float camH, int side) {
-        this.x         = startX;
-        this.y         = startY;
-        this.bodyColor  = bodyColor;
-        this.accentColor = accentColor;
-        this.keyUp     = keyUp;
-        this.keyDown   = keyDown;
-        this.keyLeft   = keyLeft;
-        this.keyRight  = keyRight;
-        this.world     = world;
-        this.camW      = camW;
-        this.camH      = camH;
-        this.side      = side;
-
-        camera = new OrthographicCamera(camW, camH);
-        camera.position.set(x + SIZE / 2f, y + SIZE / 2f, 0);
-        camera.update();
-    }
-
-    // network-only constructor — position set by received state, no keys needed (default zoom, side=1)
-    public Player(float startX, float startY,
-                  Color bodyColor, Color accentColor,
-                  Collidable world) {
-        this(startX, startY, bodyColor, accentColor,
-             -1, -1, -1, -1, world, 960f, 1080f, 1);
-    }
-
-    /**
-     * Restores health, capped at MAX_HEALTH. There is deliberately no passive regeneration
-     * anywhere in the game — this is only ever reached by consuming an item, so a player
-     * who runs out of health packs stays hurt until the level restarts.
-     */
+    // Only items heal, there is no regeneration
     public void heal(float amount) {
-        if (amount <= 0f || health <= 0f) return; // the dead don't drink medkits
+        if (amount <= 0f || health <= 0f) return;
         health = Math.min(MAX_HEALTH, health + amount);
     }
 
     public void takeDamage(float amount) {
-        if (amount <= 0f) return; // zero/negative damage must not trigger the hurt flash
+        if (amount <= 0f) return;
         float newHealth = Math.max(0f, health - amount);
-        if (newHealth < health) triggerHurtVisual(); // only fires when health actually dropped
+        if (newHealth < health) hurtVisualTimer = HURT_FLASH_DURATION;
         health = newHealth;
     }
 
-    /** Starts (or restarts) the short attack lunge/pulse. Call exactly once per accepted swing. */
     public void triggerAttackVisual() {
         attackVisualTimer = ATTACK_VISUAL_DURATION;
     }
 
-    /** Starts (or refreshes) the hurt flash — continuous contact keeps extending it. */
-    private void triggerHurtVisual() {
-        hurtVisualTimer = HURT_FLASH_DURATION;
-    }
-
-    /**
-     * Advances the visual-only timers. Independent of movement/input — must be called
-     * once per frame regardless of whether this player is moving, has a popup open, or
-     * the mission has failed, so an in-flight lunge/flash always finishes cleanly.
-     */
     public void updateVisualState(float delta) {
-        if (attackVisualTimer > 0f) attackVisualTimer = Math.max(0f, attackVisualTimer - delta);
-        if (hurtVisualTimer > 0f) hurtVisualTimer = Math.max(0f, hurtVisualTimer - delta);
+        attackVisualTimer = Math.max(0f, attackVisualTimer - delta);
+        hurtVisualTimer = Math.max(0f, hurtVisualTimer - delta);
     }
 
-    /** Clears every temporary visual-only state. Called from every Level 1 restart handler. */
     public void resetVisualState() {
         attackVisualTimer = 0f;
         hurtVisualTimer = 0f;
     }
 
-    /** Adds a second key that also moves this player right, alongside the primary one. */
     public void setAlternateRightKey(int key) {
         this.keyRightAlt = key;
     }
 
-    private boolean isMovingRight() {
-        return Gdx.input.isKeyPressed(keyRight)
-            || (keyRightAlt >= 0 && Gdx.input.isKeyPressed(keyRightAlt));
+    public void update(float delta) {
+        float dx = 0, dy = 0;
+        if (Gdx.input.isKeyPressed(keyUp))    dy += SPEED * delta;
+        if (Gdx.input.isKeyPressed(keyDown))  dy -= SPEED * delta;
+        if (Gdx.input.isKeyPressed(keyLeft))  dx -= SPEED * delta;
+        if (Gdx.input.isKeyPressed(keyRight) || (keyRightAlt >= 0 && Gdx.input.isKeyPressed(keyRightAlt))) {
+            dx += SPEED * delta;
+        }
+        move(dx, dy, delta);
     }
 
-    // reads local keyboard — used by host for P1, by client for P2
-    public PlayerInput readInput() {
-        return new PlayerInput(
-            Gdx.input.isKeyPressed(keyUp),
-            Gdx.input.isKeyPressed(keyDown),
-            Gdx.input.isKeyPressed(keyLeft),
-            Gdx.input.isKeyPressed(keyRight)
-        );
-    }
-
-    /**
-     * Loads a 4-direction walk sheet (8 columns x 4 rows: down, up, left, right) and
-     * slices it into a looping Animation per direction. There's no separate idle pose in
-     * these sheets, so idle just holds frame 0 of whichever direction was last faced.
-     *
-     * Frame boundaries are detected from the actual transparent gutters between poses
-     * rather than assumed to be a uniform grid — these hand-placed sheets aren't
-     * perfectly evenly spaced, and slicing on a uniform grid cut a few pixels off one
-     * neighboring frame and into the next (stray pixels above/below/beside the sprite).
-     */
-    @SuppressWarnings("unchecked")
-    public void setTexture(String spriteSheetFile) {
-        if (spriteSheet != null) spriteSheet.dispose();
-
-        Pixmap pixmap = new Pixmap(Gdx.files.internal(spriteSheetFile));
-        int[] colBoundaries = detectBoundaries(pixmap, true, SHEET_COLUMNS);
-        int[] rowBoundaries = detectBoundaries(pixmap, false, SHEET_ROWS);
-
-        spriteSheet = new Texture(pixmap);
-        pixmap.dispose();
-
-        walkAnimations = new Animation[SHEET_ROWS];
-        for (int row = 0; row < SHEET_ROWS; row++) {
-            TextureRegion[] frames = new TextureRegion[SHEET_COLUMNS];
-            int y0 = rowBoundaries[row], y1 = rowBoundaries[row + 1];
-            for (int col = 0; col < SHEET_COLUMNS; col++) {
-                int x0 = colBoundaries[col], x1 = colBoundaries[col + 1];
-                frames[col] = new TextureRegion(spriteSheet, x0, y0, x1 - x0, y1 - y0);
-            }
-            walkAnimations[row] = new Animation<>(FRAME_DURATION, frames);
-        }
-    }
-
-    /**
-     * Finds expectedFrames boundaries along one axis by locating fully-transparent
-     * gutters between frames and cutting at the midpoint of each gutter. Falls back to
-     * a uniform grid if the sheet doesn't actually have expectedFrames content runs
-     * (an unexpected layout — better to degrade to the old behavior than guess wrong).
-     */
-    private static int[] detectBoundaries(Pixmap pixmap, boolean horizontal, int expectedFrames) {
-        int length = horizontal ? pixmap.getWidth() : pixmap.getHeight();
-        int otherLength = horizontal ? pixmap.getHeight() : pixmap.getWidth();
-
-        boolean[] hasContent = new boolean[length];
-        for (int i = 0; i < length; i++) {
-            for (int j = 0; j < otherLength; j++) {
-                int px = horizontal ? i : j;
-                int py = horizontal ? j : i;
-                int alpha = pixmap.getPixel(px, py) & 0xFF;
-                if (alpha > ALPHA_THRESHOLD) {
-                    hasContent[i] = true;
-                    break;
-                }
-            }
-        }
-
-        List<int[]> runs = new ArrayList<>(); // each is [start, endInclusive]
-        int runStart = -1;
-        for (int i = 0; i < length; i++) {
-            if (hasContent[i] && runStart == -1) {
-                runStart = i;
-            } else if (!hasContent[i] && runStart != -1) {
-                runs.add(new int[]{runStart, i - 1});
-                runStart = -1;
-            }
-        }
-        if (runStart != -1) runs.add(new int[]{runStart, length - 1});
-
-        int[] boundaries = new int[expectedFrames + 1];
-        if (runs.size() != expectedFrames) {
-            for (int i = 0; i <= expectedFrames; i++) {
-                boundaries[i] = Math.round(i * length / (float) expectedFrames);
-            }
-            return boundaries;
-        }
-
-        boundaries[0] = 0;
-        boundaries[expectedFrames] = length;
-        for (int i = 1; i < expectedFrames; i++) {
-            int prevEnd = runs.get(i - 1)[1];
-            int nextStart = runs.get(i)[0];
-            boundaries[i] = (prevEnd + nextStart + 1) / 2;
-        }
-        return boundaries;
-    }
-
-    // applies a received PlayerInput — used by host to move P2
+    // Used by the host for the client's player
     public void applyInput(PlayerInput input, float delta) {
         float dx = 0, dy = 0;
         if (input.up)    dy += SPEED * delta;
         if (input.down)  dy -= SPEED * delta;
         if (input.left)  dx -= SPEED * delta;
         if (input.right) dx += SPEED * delta;
-
-        move(dx, dy, delta);
-    }
-
-    // reads keyboard and moves — used by host for P1
-    public void update(float delta) {
-        float dx = 0, dy = 0;
-        if (Gdx.input.isKeyPressed(keyUp))    dy += SPEED * delta;
-        if (Gdx.input.isKeyPressed(keyDown))  dy -= SPEED * delta;
-        if (Gdx.input.isKeyPressed(keyLeft))  dx -= SPEED * delta;
-        if (isMovingRight())                  dx += SPEED * delta;
-
         move(dx, dy, delta);
     }
 
     private void move(float dx, float dy, float delta) {
-        isMoving = (dx != 0 || dy != 0);
-
-        // Diagonal input faces the side sprite (horizontal takes priority over vertical).
+        // Diagonal input faces the side sprite.
         if (dx < 0) facing = Direction.LEFT;
         else if (dx > 0) facing = Direction.RIGHT;
         else if (dy > 0) facing = Direction.UP;
         else if (dy < 0) facing = Direction.DOWN;
+        stateTime = (dx != 0 || dy != 0) ? stateTime + delta : 0f;
 
-        stateTime = isMoving ? stateTime + delta : 0f;
-
-        // Each axis is tested separately so a blocked X still allows the Y step (wall
-        // sliding). Tested against the collider, not the sprite box — see COLLIDER.
-        if (!world.collides(colliderX(x + dx), colliderY(y), COLLIDER, COLLIDER, side)) x += dx;
-        if (!world.collides(colliderX(x), colliderY(y + dy), COLLIDER, COLLIDER, side)) y += dy;
-
+        // X and Y separately so you can slide along walls
+        if (!world.collides(x + dx, y, bounds.footW, bounds.footH, side)) x += dx;
+        if (!world.collides(x, y + dy, bounds.footW, bounds.footH, side)) y += dy;
         updateCamera();
     }
 
-    /**
-     * Resizes this player's view of the world, in world units.
-     *
-     * The constructor's camW/camH were authored against a 1920x1080 window, where each
-     * split-screen half is 958x1080 and so happens to match 640x720's aspect ratio almost
-     * exactly. On any other shape of display it does not: a 4:3 projector gives each half
-     * a 510x768 viewport, and mapping a 640x720 world rect onto that squashes everything
-     * 25% horizontally. The owning screen calls this with the real viewport's aspect so
-     * the world is never distorted, whatever the display.
-     */
+    public void placeAt(float x, float y) {
+        this.x = x;
+        this.y = y;
+        stateTime = 0f;
+        updateCamera();
+    }
+
     public void setCameraViewport(float camW, float camH) {
         this.camW = camW;
         this.camH = camH;
         camera.viewportWidth = camW;
         camera.viewportHeight = camH;
-        updateCamera(); // re-clamp: the clamp bounds are derived from camW/camH
+        updateCamera();
     }
 
-    /**
-     * The collider's bottom-left corner for a given sprite-box position. Public so that
-     * everything physical — movement, contact damage, standing on a pressure plate —
-     * tests the same box, rather than some using the collider and others the sprite.
-     */
-    public static float colliderX(float spriteX) { return spriteX + COLLIDER_OFFSET_X; }
-
-    public static float colliderY(float spriteY) { return spriteY + COLLIDER_OFFSET_Y; }
-
-    /** Centre of the collider — the reference point for range checks. */
-    public float centreX() { return x + SIZE / 2f; }
-
-    public float centreY() { return colliderY(y) + COLLIDER / 2f; }
-
-    // updates camera to follow this player — call after any position change
+    // Clamped so the camera never shows outside the map
     public void updateCamera() {
         float halfW = camW / 2f;
         float halfH = camH / 2f;
-        float camX = Math.max(halfW, Math.min(x + SIZE / 2f, world.getWorldWidth() - halfW));
-        float camY = Math.max(halfH, Math.min(y + SIZE / 2f, world.getWorldHeight() - halfH));
-        camera.position.set(camX, camY, 0);
+        camera.position.set(
+            Math.max(halfW, Math.min(centreX(), world.getWorldWidth() - halfW)),
+            Math.max(halfH, Math.min(centreY(), world.getWorldHeight() - halfH)), 0);
         camera.update();
     }
 
-    public void draw(ShapeRenderer shape) {
-        // body
-         shape.setColor(bodyColor);
-        shape.rect(x, y, SIZE, SIZE);
+    public float colliderWidth() { return bounds.footW; }
 
-        // visor strip
-        shape.setColor(accentColor);
-        shape.rect(x + 5f, y + SIZE - 13f, SIZE - 10f, 9f);
+    public float colliderHeight() { return bounds.footH; }
 
-        // visor inner reflection
-        shape.setColor(0.05f, 0.05f, 0.1f, 1f);
-        shape.rect(x + 8f, y + SIZE - 11f, SIZE - 16f, 5f);
+    public float colliderCentreX() { return x + bounds.footW / 2f; }
 
-        // legs
-        shape.setColor(bodyColor.r * 0.6f, bodyColor.g * 0.6f, bodyColor.b * 0.6f, 1f);
-        shape.rect(x + 4f,         y, 10f, 9f);
-        shape.rect(x + SIZE - 14f, y, 10f, 9f);
+    public float colliderCentreY() { return y + bounds.footH / 2f; }
 
-        // shoulder pads
-        shape.setColor(accentColor.r * 0.7f, accentColor.g * 0.7f, accentColor.b * 0.7f, 1f);
-        shape.rect(x,             y + SIZE - 18f, 7f, 7f);
-        shape.rect(x + SIZE - 7f, y + SIZE - 18f, 7f, 7f);
+    // Body centre, used for reach and attacks
+    public float centreX() { return x - bounds.footX + bounds.bodyX + bounds.bodyW / 2f; }
+
+    public float centreY() { return y - bounds.footY + bounds.bodyY + bounds.bodyH / 2f; }
+
+    public boolean colliderOverlaps(Rectangle zone) {
+        return x < zone.x + zone.width && x + bounds.footW > zone.x
+            && y < zone.y + zone.height && y + bounds.footH > zone.y;
+    }
+
+    // Used for enemy contact damage
+    public boolean bodyOverlaps(float boxX, float boxY, float boxW, float boxH) {
+        float bodyLeft = x - bounds.footX + bounds.bodyX;
+        float bodyBottom = y - bounds.footY + bounds.bodyY;
+        return bodyLeft < boxX + boxW && bodyLeft + bounds.bodyW > boxX
+            && bodyBottom < boxY + boxH && bodyBottom + bounds.bodyH > boxY;
+    }
+
+    // Measured to the zone's nearest edge, because consoles are painted into the walls
+    public boolean canReach(Rectangle zone) {
+        float cx = centreX();
+        float cy = centreY();
+        float dx = Math.max(Math.max(zone.x - cx, 0f), cx - (zone.x + zone.width));
+        float dy = Math.max(Math.max(zone.y - cy, 0f), cy - (zone.y + zone.height));
+        return dx * dx + dy * dy <= INTERACT_RANGE * INTERACT_RANGE;
     }
 
     public void draw(SpriteBatch batch) {
-        if (walkAnimations == null) return;
-        TextureRegion frame = walkAnimations[facing.ordinal()].getKeyFrame(stateTime, true);
+        TextureRegion frame = walk[facing.ordinal()].getKeyFrame(stateTime, true);
 
-        // Detected frame boundaries aren't perfectly uniform width, so scale per-frame
-        // (height locked to SIZE, width proportional) rather than reusing one fixed size.
-        float drawH = SIZE;
-        float drawW = frame.getRegionWidth() * (SIZE / (float) frame.getRegionHeight());
-        float drawX = x + (SIZE - drawW) / 2f;
-        float drawY = y;
+        // Same placement SpriteBounds measured, so the feet line up with the hitbox
+        float drawW = frame.getRegionWidth() * (SIZE / frame.getRegionHeight());
+        float drawX = x - bounds.footX + (SIZE - drawW) / 2f;
+        float drawY = y - bounds.footY;
 
-        boolean isDead = health <= 0f;
-
-        // Attack lunge/pulse — visual-offset only, x/y (gameplay position) never changes.
-        // Suppressed once dead so a stale timer can't animate a corpse.
+        boolean dead = health <= 0f;
         float offsetX = 0f, offsetY = 0f;
         float scale = 1f;
-        if (!isDead && attackVisualTimer > 0f) {
-            float progress = 1f - (attackVisualTimer / ATTACK_VISUAL_DURATION); // 0 at trigger -> 1 at end
-            float curve = (float) Math.sin(progress * Math.PI); // eases out and back to 0, never snaps
+        if (!dead && attackVisualTimer > 0f) {
+            float progress = 1f - attackVisualTimer / ATTACK_VISUAL_DURATION;
+            float curve = (float) Math.sin(progress * Math.PI); // out and back, never snaps
             float lunge = curve * ATTACK_LUNGE_DISTANCE;
             switch (facing) {
                 case DOWN:  offsetY = -lunge; break;
@@ -432,40 +252,27 @@ public class Player {
 
         float rotation = 0f;
         float alpha = 1f;
-        float tintG = 1f, tintB = 1f;
-
-        // Death rendering takes priority over the hurt flash — a corpse never flashes red.
-        if (isDead) {
+        float tint = 1f;
+        if (dead) {
             rotation = DEAD_ROTATION_DEGREES;
             alpha = DEAD_ALPHA;
         } else if (hurtVisualTimer > 0f) {
-            float hurtProgress = hurtVisualTimer / HURT_FLASH_DURATION; // 1 at trigger -> 0 as it fades
-            tintG = 1f - HURT_TINT_STRENGTH * hurtProgress;
-            tintB = 1f - HURT_TINT_STRENGTH * hurtProgress;
+            tint = 1f - HURT_TINT_STRENGTH * (hurtVisualTimer / HURT_FLASH_DURATION);
         }
 
-        // origin = sprite centre, so both the attack scale pulse and the dead rotation
-        // pivot around the middle of the sprite rather than its bottom-left corner.
-        batch.setColor(1f, tintG, tintB, alpha);
-        batch.draw(frame, drawX + offsetX, drawY + offsetY, drawW / 2f, drawH / 2f, drawW, drawH,
+        // Rotate and scale around the sprite centre
+        batch.setColor(1f, tint, tint, alpha);
+        batch.draw(frame, drawX + offsetX, drawY + offsetY, drawW / 2f, SIZE / 2f, drawW, SIZE,
             scale, scale, rotation);
-        batch.setColor(1f, 1f, 1f, 1f); // restore — never leave the next draw call tinted/faded
+        batch.setColor(1f, 1f, 1f, 1f);
     }
 
-    /**
-     * The front-facing idle pose, for the inventory portrait. Frame 0 of the DOWN row is
-     * the same frame the character holds while standing still, so the portrait matches
-     * what the player sees of themselves on the map. Null before setTexture() has run.
-     *
-     * The sheet's texture keeps LibGDX's default Nearest filter, so drawing this large
-     * stays pixel-art crisp instead of blurring.
-     */
+    // For the inventory portrait
     public TextureRegion portraitFrame() {
-        if (walkAnimations == null) return null;
-        return walkAnimations[Direction.DOWN.ordinal()].getKeyFrames()[0];
+        return walk[Direction.DOWN.ordinal()].getKeyFrames()[0];
     }
 
     public void dispose() {
-        if (spriteSheet != null) spriteSheet.dispose();
+        sheet.dispose();
     }
 }

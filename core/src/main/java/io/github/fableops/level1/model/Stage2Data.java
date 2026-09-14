@@ -8,20 +8,14 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Stage 2 — Symbol Translation Protocol.
- * Player 1 sees the code as a sequence of symbols and enters the digits.
- * Player 2 holds the legend saying what each symbol is worth, and never submits.
- *
- * The split is deliberately total: Player 1's screen contains no digits at all, and
- * Player 2's legend is listed in a shuffled order that carries no positional meaning.
- * Neither screen is solvable on its own, which is what the previous version got wrong —
- * it spelled the comparison values out ("less than 7", "between 5 and 9"), so Player 1
- * could read every number straight off their own screen and never had to ask.
+ * Stage 2 - Symbol Translation Protocol.
+ * Player 1 sees the code as symbols and enters the digits; Player 2 holds the legend saying what
+ * each symbol is worth and never submits. Player 1's screen shows no digits and the legend is
+ * shuffled, so neither screen can be solved alone.
  */
 public class Stage2Data extends StageData {
     private static final int POSITION_COUNT = 3;
-    // No "=" in the pool — the legend is rendered as "<symbol> = <digit>", so an "="
-    // symbol would print the unreadable "= = 4".
+    // No "=" in the pool: the legend reads "<symbol> = <digit>", so "= = 4" would be unreadable.
     private static final String[] SYMBOL_POOL = {"@", "#", "$", "%", "&", "*", "+", "?"};
 
     private final String[] symbolAtPosition = new String[POSITION_COUNT];
@@ -44,11 +38,9 @@ public class Stage2Data extends StageData {
         for (int i = 0; i < POSITION_COUNT; i++) {
             symbolAtPosition[i] = symbols.get(i);
             correctValues[i] = String.valueOf(digits.get(i));
-            ownerPlayerId[i] = 1; // only Player 1 submits this stage
+            ownerPlayerId[i] = 1;
             legendForPlayer2.add(symbols.get(i) + " = " + digits.get(i));
         }
-
-        // Shuffled so the legend's order never hints at the code's order.
         Collections.shuffle(legendForPlayer2);
     }
 

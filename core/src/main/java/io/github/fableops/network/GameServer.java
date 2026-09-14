@@ -4,65 +4,54 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 
+// Movement channel, host side
 public class GameServer {
 
     private static final int PORT = 9090;
-    private ServerSocket serverSocket;
-    private Socket clientSocket;
-    private PrintWriter out;
-    private BufferedReader in;
+    // About twice per frame at 30 FPS
+    static final long SEND_INTERVAL_MS = 16;
+
+    private volatile ServerSocket serverSocket;
+    private volatile Socket clientSocket;
+    private volatile boolean stopped = false;
 
     private volatile PlayerInput latestClientInput = new PlayerInput();
-    private volatile WorldState  latestState       = new WorldState();
-    private volatile boolean     running           = false;
-    private volatile boolean     clientConnected   = false;
+    private volatile WorldState latestState = new WorldState();
+    private volatile boolean clientConnected = false;
 
+    // Blocks until the client connects
     public void start() throws IOException {
-        serverSocket = new ServerSocket();
-        serverSocket.setReuseAddress(true);
-        serverSocket.bind(new java.net.InetSocketAddress(PORT));
-        System.out.println("Waiting for client on port " + PORT);
+        ServerSocket server = new ServerSocket();
+        serverSocket = server;
+        if (stopped) server.close(); // stop() was already called
+        server.setReuseAddress(true);
+        server.bind(new InetSocketAddress(PORT));
 
-        // release port automatically on any exit
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            stop();
-            System.out.println("Server shutdown — port released.");
-        }));
-
-        clientSocket = serverSocket.accept();
-        clientSocket.setTcpNoDelay(true);
+        Socket client = server.accept();
+        clientSocket = client;
+        client.setTcpNoDelay(true);
+        PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+        BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
         clientConnected = true;
-        System.out.println("Client connected.");
-
-        out = new PrintWriter(clientSocket.getOutputStream(), true);
-        in  = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-
-        running = true;
 
         Thread networkThread = new Thread(() -> {
-            while (running) {
+            while (clientConnected) {
                 try {
                     out.println(latestState.serialize());
-
                     if (in.ready()) {
                         String line = in.readLine();
-                        if (line != null) {
-                            latestClientInput = PlayerInput.deserialize(line);
-                        }
+                        if (line != null) latestClientInput = PlayerInput.deserialize(line);
                     }
-
-                    Thread.sleep(8);
-
+                    Thread.sleep(SEND_INTERVAL_MS);
                 } catch (Exception e) {
-                    System.out.println("Client disconnected.");
                     clientConnected = false;
-                    running = false;
                 }
             }
-        });
+        }, "GameServer");
         networkThread.setDaemon(true);
         networkThread.start();
     }
@@ -75,23 +64,23 @@ public class GameServer {
         return latestClientInput;
     }
 
-    public boolean isConnected() {
-        return running;
-    }
-
     public boolean isClientConnected() {
         return clientConnected;
     }
 
+    // Can be called while start() is still waiting
     public void stop() {
-        running = false;
+        stopped = true;
         clientConnected = false;
         try {
-            if (clientSocket != null && !clientSocket.isClosed()) clientSocket.close();
-            if (serverSocket != null && !serverSocket.isClosed()) serverSocket.close();
+            if (clientSocket != null) clientSocket.close();
         } catch (IOException ignored) {
-            // Closing an already-closing socket during shutdown — benign, matches
-            // the same pattern in HostSession.stop()/ClientSession.stop().
+            // Already closing.
+        }
+        try {
+            if (serverSocket != null) serverSocket.close();
+        } catch (IOException ignored) {
+            // Already closing.
         }
     }
 }
