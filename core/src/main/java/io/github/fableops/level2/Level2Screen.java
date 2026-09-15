@@ -13,8 +13,12 @@ import com.badlogic.gdx.math.Rectangle;
 
 import io.github.fableops.Player;
 import io.github.fableops.inventory.PlayerInventories;
+import io.github.fableops.level2.loot.LootField;
+import io.github.fableops.level2.loot.LootDrop;
 import io.github.fableops.level2.network.CoreInteractRequestMessage;
 import io.github.fableops.level2.network.CoreStateMessage;
+import io.github.fableops.level2.network.LootInteractRequestMessage;
+import io.github.fableops.level2.network.LootPickedUpMessage;
 import io.github.fableops.network.GameClient;
 import io.github.fableops.network.GameServer;
 import io.github.fableops.network.PlayerInput;
@@ -36,6 +40,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     private final PlayerInventories inventories = new PlayerInventories();
     private final Level2Map world = new Level2Map();
     private final CoreObject core = new CoreObject(inventories);
+    private final LootField loot = new LootField();
     private final Player player1;
     private final Player player2;
 
@@ -75,17 +80,21 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
 
         // Replace Level 1's listeners, that screen is disposed
         if (isHost || isDebug) {
-            controller = new Level2Controller(hostSession, core, world, player1, player2);
+            controller = new Level2Controller(hostSession, core, loot, inventories, world, player1, player2);
             if (hostSession != null) hostSession.setListener(controller.asMessageListener());
         } else {
             controller = null;
-            clientSession.setListener((type, body) -> {
-                if (!"CORE_STATE".equals(type)) return;
-                CoreStateMessage message = CoreStateMessage.deserialize(body);
-                Gdx.app.postRunnable(() -> {
-                    core.set(message.getState(), message.getCarrierId());
-                    if (message.getState() == CoreObject.State.IN_SOCKET) world.openExit();
-                });
+                        clientSession.setListener((type, body) -> {
+                if ("CORE_STATE".equals(type)) {
+                    CoreStateMessage message = CoreStateMessage.deserialize(body);
+                    Gdx.app.postRunnable(() -> {
+                        core.set(message.getState(), message.getCarrierId());
+                        if (message.getState() == CoreObject.State.IN_SOCKET) world.openExit();
+                    });
+                } else if ("LOOT_PICKED_UP".equals(type)) {
+                    LootPickedUpMessage message = LootPickedUpMessage.deserialize(body);
+                    Gdx.app.postRunnable(() -> loot.applyPickup(message.getLootId(), message.getPlayerId(), inventories));
+                }
             });
         }
     }
@@ -102,6 +111,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
 
         inventories.handleInput(isHost || isDebug, !isHost || isDebug, false, player1, player2);
         core.update(delta);
+        loot.update(delta);
         player1.updateVisualState(delta);
         player2.updateVisualState(delta);
 
@@ -162,20 +172,42 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         client.pollState().applyTo(player1, player2);
     }
 
-    // E takes or places the core. The client only asks, the host decides
+    // E takes or places the core. G picks up loot. The client only asks, the host decides
     private void handleInteraction() {
         if (Gdx.input.isKeyJustPressed(Input.Keys.E)) {
             if (isDebug) {
-                controller.interact(1);
-                controller.interact(2);
+                controller.interactCore(1);
+                controller.interactCore(2);
             } else if (isHost) {
-                controller.interact(1);
+                controller.interactCore(1);
             } else if (core.prompt(world, player2, 2) != null) {
                 clientSession.send(new CoreInteractRequestMessage());
             }
         }
-        localPrompt = core.prompt(world, isHost || isDebug ? player1 : player2, isHost || isDebug ? 1 : 2);
-        if (localPrompt == null && isDebug) localPrompt = core.prompt(world, player2, 2);
+        if (Gdx.input.isKeyJustPressed(Input.Keys.G)) {
+            if (isDebug) {
+                pickUpLoot(1);
+                pickUpLoot(2);
+            } else if (isHost) {
+                pickUpLoot(1);
+            } else {
+                LootDrop drop = loot.findReachablePickup(player2, core.getState());
+                if (drop != null) clientSession.send(new LootInteractRequestMessage(drop.getId()));
+            }
+        }
+        localPrompt = prompt(isHost || isDebug ? player1 : player2, isHost || isDebug ? 1 : 2);
+        if (localPrompt == null && isDebug) localPrompt = prompt(player2, 2);
+    }
+
+    private void pickUpLoot(int playerId) {
+        Player player = (playerId == 1) ? player1 : player2;
+        LootDrop drop = loot.findReachablePickup(player, core.getState());
+        if (drop != null) controller.interactLoot(playerId, drop.getId());
+    }
+
+    private String prompt(Player player, int playerId) {
+        String corePrompt = core.prompt(world, player, playerId);
+        return corePrompt != null ? corePrompt : loot.prompt(player, core.getState());
     }
 
     // Called once per camera by SplitScreen.drawHalves()
@@ -191,6 +223,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         player2.draw(batch);
         batch.end();
 
+        drawLoot(camera);
         drawCore(camera);
     }
 
@@ -205,6 +238,13 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         core.draw(shape, socket.x + socket.width / 2f, socket.y + socket.height / 2f);
         shape.end();
         Gdx.gl.glDisable(GL20.GL_BLEND);
+    }
+
+       private void drawLoot(OrthographicCamera camera) {
+        batch.setProjectionMatrix(camera.combined);
+        batch.begin();
+        loot.render(batch, core.getState());
+        batch.end();
     }
 
     private void drawUI() {
@@ -268,6 +308,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         player2.dispose();
         world.dispose();
         core.dispose();
+        loot.dispose();
         if (server != null) server.stop();
         if (client != null) client.stop();
         if (hostSession != null) hostSession.stop();
