@@ -99,7 +99,7 @@ public class Player {
         Pixmap attackPixmap = new Pixmap(Gdx.files.internal(attackSheetFile));
         attackSheet = new Texture(attackPixmap);
         attack = new Animation[SHEET_ROWS];
-        loadAttack(pixmap, attackPixmap);
+        loadAttack(pixmap, attackPixmap, attackSheetFile);
         attackPixmap.dispose();
         pixmap.dispose();
     }
@@ -115,7 +115,7 @@ public class Player {
 
     // The attack art isn't drawn at the same size or spot as the walk art, so each attack row is
     // scaled until its first frame is as tall as the standing walk frame, with the feet and body centre lined up
-    private void loadAttack(Pixmap walkPixmap, Pixmap attackPixmap) {
+    private void loadAttack(Pixmap walkPixmap, Pixmap attackPixmap, String attackSheetFile) {
         int[] rows = boundaries(attackPixmap, false, SHEET_ROWS);
         int[] grid = SpriteSheetSlicer.uniform(attackPixmap.getWidth(), SHEET_COLUMNS);
         for (int row = 0; row < SHEET_ROWS; row++) {
@@ -132,6 +132,10 @@ public class Player {
             TextureRegion stand = walk[row].getKeyFrames()[0];
             int[] w = SpriteSheetSlicer.opaqueBounds(walkPixmap, stand); // {left, top, right, bottom}
             int[] a = SpriteSheetSlicer.opaqueBounds(attackPixmap, frames[0]);
+            if (a[1] < 0) {
+                throw new IllegalStateException(attackSheetFile + " has an empty first frame in row " + row
+                    + ", so the attack can't be lined up with the walk sprite.");
+            }
             float walkScale = SIZE / stand.getRegionHeight();
             float scale = (w[3] - w[1] + 1) * walkScale / (a[3] - a[1] + 1);
             float walkLeft = -bounds.footX + (SIZE - stand.getRegionWidth() * walkScale) / 2f;
@@ -232,12 +236,15 @@ public class Player {
 
     public float getAttackTimer() { return attackTimer; }
 
+    public float getStateTime() { return stateTime; }
+
     // Client side: position and pose both come from the host
-    public void applyRemote(float x, float y, int direction, float attackTimer) {
+    public void applyRemote(float x, float y, int direction, float stateTime, float attackTimer) {
         this.x = x;
         this.y = y;
         facing = DIRECTIONS[direction];
         attackDirection = facing;
+        this.stateTime = stateTime;
         this.attackTimer = attackTimer;
         updateCamera();
     }

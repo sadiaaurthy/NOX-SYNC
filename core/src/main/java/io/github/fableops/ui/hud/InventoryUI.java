@@ -145,9 +145,13 @@ public class InventoryUI {
         drawSlots(shape, panelX, panelY, inventory, accent);
         drawPortraitFrame(shape, panelX, panelY);
         drawSharedSlot(shape, panelX, panelY, accent);
+
+        // One batch pass for these three, so none of them can use the ShapeRenderer
+        batch.begin();
         drawIcons(batch, panelX, panelY, inventory, shared);
         drawText(batch, panelX, panelY, inventory, shared, player, accent);
         drawPortrait(batch, panelX, panelY, player);
+        batch.end();
 
         Gdx.gl.glDisable(GL20.GL_BLEND);
     }
@@ -244,12 +248,10 @@ public class InventoryUI {
     }
 
     private void drawIcons(SpriteBatch batch, float panelX, float panelY, Inventory inventory, SharedSlot shared) {
-        batch.begin();
         for (int i = 0; i < Inventory.CAPACITY; i++) {
             drawIcon(batch, inventory.get(i), slotX(panelX, i), slotY(panelY, i));
         }
         drawIcon(batch, shared.get(), sharedSlotX(panelX), sharedSlotY(panelY));
-        batch.end();
     }
 
     // 46x46 in the middle of the slot, the same size as UnstableCore.png
@@ -291,17 +293,13 @@ public class InventoryUI {
         float drawW = frame.getRegionWidth() * scale;
         float drawH = frame.getRegionHeight() * scale;
 
-        batch.begin();
         batch.draw(frame, boxX + (boxW - drawW) / 2f, boxTop - boxH + (boxH - drawH) / 2f, drawW, drawH);
-        batch.end();
     }
 
     private void drawText(SpriteBatch batch, float panelX, float panelY,
                           Inventory inventory, SharedSlot shared, Player player, Color accent) {
         float left = panelX + PAD;
         float right = panelX + PANEL_W - PAD;
-
-        batch.begin();
 
         float titleY = panelY + PANEL_H - PAD - 4f;
         font.getData().setScale(TITLE_SCALE);
@@ -369,7 +367,5 @@ public class InventoryUI {
             font.setColor(accent);
             font.draw(batch, "[ENTER] USE", right - 200f, promptY);
         }
-
-        batch.end();
     }
 }
