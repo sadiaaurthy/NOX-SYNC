@@ -11,8 +11,9 @@ import java.util.Random;
 public class SwarmController {
 
     private static final int MAX_SPAWN_PER_WAVE = 6;
-    private static final float INITIAL_SPAWN_DELAY_SECONDS = 0.15f;
-    private static final float SPAWN_INTERVAL_SECONDS = 0.35f;
+    // Defaults used by callers that don't request their own pacing (e.g. Level 1)
+    private static final float DEFAULT_INITIAL_SPAWN_DELAY_SECONDS = 0.15f;
+    private static final float DEFAULT_SPAWN_INTERVAL_SECONDS = 0.35f;
 
     private static final float TAU = (float) (Math.PI * 2.0);
     // So enemies never spawn right on top of the player
@@ -26,6 +27,9 @@ public class SwarmController {
     private final SpriteBounds bounds;
     // Closer than this and enemies get pushed apart
     private final float separationDistance;
+    // Per-instance pacing so one level (e.g. Level 2) can spawn slower without affecting others
+    private final float initialSpawnDelay;
+    private final float spawnInterval;
 
     private final List<Enemy> enemiesP1 = new ArrayList<>();
     private final List<Enemy> enemiesP2 = new ArrayList<>();
@@ -52,8 +56,15 @@ public class SwarmController {
     }
 
     public SwarmController(EnemySprites sprites) {
+        this(sprites, DEFAULT_INITIAL_SPAWN_DELAY_SECONDS, DEFAULT_SPAWN_INTERVAL_SECONDS);
+    }
+
+    // Lets a level use slower/faster spawn pacing than the default without affecting other levels
+    public SwarmController(EnemySprites sprites, float initialSpawnDelay, float spawnInterval) {
         bounds = sprites.bounds;
         separationDistance = bounds.bodyW * 0.8f;
+        this.initialSpawnDelay = initialSpawnDelay;
+        this.spawnInterval = spawnInterval;
     }
 
     // Level 1: one more enemy for each mistake, up to 6
@@ -65,7 +76,7 @@ public class SwarmController {
     // Queues count enemies around a point for that side's swarm. If there's no free spot that enemy is skipped
     public void spawnAround(int side, float aroundX, float aroundY, int count, Collidable world) {
         // Don't reset the timer of a wave that's already coming
-        if (pendingSpawns.isEmpty()) spawnCountdown = INITIAL_SPAWN_DELAY_SECONDS;
+        if (pendingSpawns.isEmpty()) spawnCountdown = initialSpawnDelay;
 
         for (int i = 0; i < count; i++) {
             if (findSpawnPoint(aroundX, aroundY, side, world)) {
@@ -117,7 +128,7 @@ public class SwarmController {
         PendingSpawn next = pendingSpawns.poll();
         List<Enemy> list = (next.side == 1) ? enemiesP1 : enemiesP2;
         list.add(new Enemy(bounds, next.x, next.y, next.side));
-        spawnCountdown = SPAWN_INTERVAL_SECONDS;
+        spawnCountdown = spawnInterval;
     }
 
     private void updateSide(List<Enemy> list, float delta, Player target, Collidable world) {

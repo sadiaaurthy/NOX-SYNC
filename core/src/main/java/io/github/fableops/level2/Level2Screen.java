@@ -51,9 +51,14 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     private static final float FIRST_WAVE_DELAY = 5f;
     private static final float WAVE_INTERVAL = 8f;
     private static final float WAVE_INTERVAL_CORE_TAKEN = 4f;
-    private static final int WAVE_SIZE = 2;
-    private static final int WAVE_SIZE_CORE_TAKEN = 3;
+    // Halved from 2/3 so fewer enemies are requested per wave (was causing overcrowded bunches)
+    private static final int WAVE_SIZE = 1;
+    private static final int WAVE_SIZE_CORE_TAKEN = 2;
     private static final int MAX_ENEMIES_PER_PLAYER = 10;
+    // Level 2's own spawn pacing (SwarmController defaults to 0.15f/0.35f for Level 1).
+    // ~3x slower so enemies trickle in one at a time instead of appearing as a bunch.
+    private static final float SPAWN_INITIAL_DELAY_SECONDS = 0.45f;
+    private static final float SPAWN_INTERVAL_SECONDS = 1.05f;
     // Enemy and gun updates are sent 20 times a second, not every frame
     private static final float STATE_INTERVAL = 1f / 20f;
     // A fallen player's death animation plays out before the mission failed window
@@ -130,7 +135,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         this.hud = hud;
         this.inventories = inventories;
         this.core = new CoreObject(inventories);
-        this.swarm = new SwarmController(enemySprites);
+        this.swarm = new SwarmController(enemySprites, SPAWN_INITIAL_DELAY_SECONDS, SPAWN_INTERVAL_SECONDS);
 
         player1.setWorld(world, 1);
         player2.setWorld(world, 2);
