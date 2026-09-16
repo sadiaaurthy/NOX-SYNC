@@ -51,13 +51,14 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     private static final float ATTACK_RANGE = 120f;
     private static final int ATTACK_DAMAGE = 15;
     private static final int CONTACT_DAMAGE = 10; // per second of contact
-    // A wave comes in around each player this often, sooner and bigger once the core is taken
+    // A wave comes in around each player this often. Taking the core keeps the pressure up by
+    // shortening the gap rather than by sending bigger groups: one enemy every 5s instead of
+    // every 8s is still 1.6x the pre-core rate, but they arrive alone and can be fought one at a time
     private static final float FIRST_WAVE_DELAY = 5f;
     private static final float WAVE_INTERVAL = 8f;
-    private static final float WAVE_INTERVAL_CORE_TAKEN = 4f;
-    // Halved from 2/3 so fewer enemies are requested per wave (was causing overcrowded bunches)
+    private static final float WAVE_INTERVAL_CORE_TAKEN = 5f;
     private static final int WAVE_SIZE = 1;
-    private static final int WAVE_SIZE_CORE_TAKEN = 2;
+    private static final int WAVE_SIZE_CORE_TAKEN = 1;
     private static final int MAX_ENEMIES_PER_PLAYER = 10;
     // Level 2's own spawn pacing (SwarmController defaults to 0.15f/0.35f for Level 1).
     // ~3x slower so enemies trickle in one at a time instead of appearing as a bunch.
