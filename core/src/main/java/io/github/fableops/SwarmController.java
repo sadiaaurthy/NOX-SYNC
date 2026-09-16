@@ -103,7 +103,7 @@ public class SwarmController {
                 float angle = offset + i * (TAU / SAMPLES_PER_RING);
                 float tryX = aroundX + (float) Math.cos(angle) * radius;
                 float tryY = aroundY + (float) Math.sin(angle) * radius;
-                if (!world.collides(tryX, tryY, bounds.footW, bounds.footH, side)) {
+                if (!world.blocksSpawn(tryX, tryY, bounds.footW, bounds.footH, side)) {
                     spawnProbe[0] = tryX;
                     spawnProbe[1] = tryY;
                     return true;

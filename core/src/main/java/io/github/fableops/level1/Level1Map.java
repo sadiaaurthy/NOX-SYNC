@@ -24,19 +24,21 @@ public class Level1Map implements Collidable {
     private static final byte CLASS_GATE = 4;
     private static final byte CLASS_TERM = 6;
 
-    // void, shared floor, P1 wing, P2 wing, gate, plate, terminal
+    // void, reactor room, P1 wing, P2 wing, gate, plate, terminal
     // Terminal (00FF11) and plate (00FF00) are very close, so the mask has to be exported flat
     private static final int[][] PALETTE = {
         {0, 0, 0}, {255, 255, 255}, {0, 255, 255}, {255, 0, 255},
         {255, 255, 0}, {0, 255, 0}, {0, 255, 17}
     };
 
-    // Each player is locked in their own wing until the reactor is unlocked
-    //                                              void   shared P1     P2     gate   plate  term
-    private static final boolean[] WALK_P1_LOCKED = {false, true, true,  false, false, true, true};
-    private static final boolean[] WALK_P2_LOCKED = {false, true, false, true,  false, true, true};
-    private static final boolean[] WALK_UNLOCKED  = {false, true, true,  true,  false, true, true};
-    private static final boolean[] WALK_GATE_OPEN = {false, true, true,  true,  true,  true, true};
+    // Each player is sealed into their own wing until all three stages are solved. The reactor
+    // room in the middle is shut to both of them until then, and the gate out of it only opens
+    // once both plates are held
+    //                                              void   room   P1     P2     gate   plate  term
+    private static final boolean[] WALK_P1_LOCKED = {false, false, true,  false, false, true, true};
+    private static final boolean[] WALK_P2_LOCKED = {false, false, false, true,  false, true, true};
+    private static final boolean[] WALK_UNLOCKED  = {false, true,  true,  true,  false, true, true};
+    private static final boolean[] WALK_GATE_OPEN = {false, true,  true,  true,  true,  true, true};
 
     private static final int STAGE_COUNT = 3;
 

@@ -60,6 +60,8 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     private static final int WAVE_SIZE = 1;
     private static final int WAVE_SIZE_CORE_TAKEN = 1;
     private static final int MAX_ENEMIES_PER_PLAYER = 10;
+    // Carrying the core cooks the pair. Seat it before this runs out or both of them go at once
+    private static final float CORE_TIME_LIMIT = 45f;
     // Level 2's own spawn pacing (SwarmController defaults to 0.15f/0.35f for Level 1).
     // ~3x slower so enemies trickle in one at a time instead of appearing as a bunch.
     private static final float SPAWN_INITIAL_DELAY_SECONDS = 0.45f;
@@ -105,6 +107,11 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     private float failureSceneTimer = 0f;
     private String failureCause = "";
     private float waveTimer = FIRST_WAVE_DELAY;
+    // Counts down only while the core is being carried
+    private float coreTimer = 0f;
+    private boolean coreWasCarried = false;
+    private int shownCoreSeconds = -1;
+    private String coreObjective = "";
     private float stateTimer = 0f;
     private boolean disposed = false;
     private boolean advancingToLevel3 = false; // guards advanceToLevel3() against running twice
@@ -212,6 +219,8 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         }
         if (Gdx.input.isKeyJustPressed(Input.Keys.F1)) debugCollisionVisible = !debugCollisionVisible;
         if (Gdx.input.isKeyJustPressed(Input.Keys.F2)) ui.cycleScale();
+        // K = take the core, K again = seat it. Debug only, so a run can be driven without walking
+        if (isDebug && !missionFailed && Gdx.input.isKeyJustPressed(Input.Keys.K)) controller.debugToggleCore();
 
         inventories.handleInput(isHost || isDebug, !isHost || isDebug, missionFailed, player1, player2);
         core.update(delta);
@@ -229,6 +238,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         }
 
         handleInteraction();
+        updateCoreTimer(delta);
         updateSwarm(delta);
         if (!missionFailed && !exitReached && world.isExitOpen()) {
             exitReached = world.isInExit(player1) && world.isInExit(player2);
@@ -342,6 +352,9 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
 
     // Taking the core brings the next wave forward as well as every one after it
     private void spawnWaves(float delta) {
+        // Once the core is seated the station stops sending anything new. Whatever is already
+        // out there stays out there, so the walk to the exit is still a fight
+        if (core.getState() == CoreObject.State.IN_SOCKET) return;
         boolean coreTaken = core.getState() != CoreObject.State.ON_PEDESTAL;
         float interval = coreTaken ? WAVE_INTERVAL_CORE_TAKEN : WAVE_INTERVAL;
         waveTimer = Math.min(waveTimer, interval) - delta;
@@ -364,10 +377,43 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         boolean breakerDown = player1.health <= 0f;
         boolean listenerDown = player2.health <= 0f;
         if (!breakerDown && !listenerDown) return;
+        failMission(StoryGate.fallen(breakerDown, listenerDown));
+    }
+
+    private void failMission(String cause) {
+        if (missionFailed) return;
         missionFailed = true;
-        failureCause = StoryGate.fallen(breakerDown, listenerDown);
+        failureCause = cause;
         failureScenePending = true;
         failureSceneTimer = FAILURE_SCENE_DELAY;
+    }
+
+    // Both machines see the same core state and count the same limit, so they agree on the
+    // moment it runs out without another message
+    private void updateCoreTimer(float delta) {
+        boolean carried = core.getState() == CoreObject.State.CARRIED;
+        if (carried && !coreWasCarried) coreTimer = CORE_TIME_LIMIT;
+        coreWasCarried = carried;
+        if (!carried || missionFailed) return;
+
+        coreTimer -= delta;
+        if (coreTimer > 0f) {
+            int seconds = (int) Math.ceil(coreTimer);
+            if (seconds != shownCoreSeconds) {
+                shownCoreSeconds = seconds;
+                coreObjective = "Core is cooking - " + seconds + "s to reach the socket";
+            }
+            return;
+        }
+        coreTimer = 0f;
+        // Both of them at once, so the two death animations play together. Only the host writes
+        // health - the client picks it up from the next state message instead of briefly
+        // disagreeing with the host in the middle of the animation
+        if (controller != null) {
+            player1.takeDamage(Player.MAX_HEALTH);
+            player2.takeDamage(Player.MAX_HEALTH);
+        }
+        failMission("The core went critical in their hands.");
     }
 
     // Waits for the death animation, then puts up the mission failed window
@@ -409,6 +455,9 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         failureScenePending = false;
         failureCause = "";
         waveTimer = FIRST_WAVE_DELAY;
+        coreTimer = 0f;
+        coreWasCarried = false;
+        shownCoreSeconds = -1;
         resetPlayer(player1, true);
         resetPlayer(player2, false);
         story.closeFailure();
@@ -511,7 +560,10 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         batch.setProjectionMatrix(uiCamera.combined);
         shape.setProjectionMatrix(uiCamera.combined);
 
-        hud.drawBanner(shape, batch, ui, TITLE, objective(), localPrompt, -1f);
+        // Meter fills (and reddens) as the core runs down, hidden when it is not being carried
+        float coreMeter = (core.getState() == CoreObject.State.CARRIED)
+            ? 1f - coreTimer / CORE_TIME_LIMIT : -1f;
+        hud.drawBanner(shape, batch, ui, TITLE, objective(), localPrompt, coreMeter);
         hud.drawPlayerCards(shape, batch, ui, player1, player2, sideOneRole);
         gun.drawHud(shape, batch, hud.font(), ui.width());
         inventories.render(shape, batch, ui.width(), ui.height(), player1, player2,
@@ -522,7 +574,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         if (exitReached) return "Exit reached. Proceeding to the Warden...";
         return switch (core.getState()) {
             case ON_PEDESTAL -> "Find the Unstable Core on its pedestal and take it.";
-            case CARRIED -> "Carry the core to the reactor socket.";
+            case CARRIED -> coreObjective;
             default -> "Exit gate open! Both of you step inside it.";
         };
     }

@@ -44,11 +44,12 @@ public class Level3EnemySpawner {
     public Level3EnemySpawner(Level3Map world, SwarmController brawlSwarm, SwarmController hackerSwarm) {
         this.brawlSwarm = brawlSwarm;
         this.hackerSwarm = hackerSwarm;
-        // Foundation: both kinds share the one arena zone painted on the map. Add more SpawnZone
-        // entries (a corner of the arena, a second room) to spread future waves out
-        Rectangle arena = world.getArenaZone();
-        zones.add(new SpawnZone(EnemyKind.BRAWL, arena));
-        zones.add(new SpawnZone(EnemyKind.HACKER, arena));
+        // Yellow on Layer 1 of the PSD is the spawnable paint. With two pockets painted the two
+        // kinds take one each; with one they share it. Add more SpawnZone entries, or paint more
+        // yellow further down the road, to spread future waves out
+        Rectangle painted = world.getSpawnZone();
+        zones.add(new SpawnZone(EnemyKind.BRAWL, painted));
+        zones.add(new SpawnZone(EnemyKind.HACKER, painted));
     }
 
     // Host/debug only - the caller is expected to gate this like every other spawn call in the project

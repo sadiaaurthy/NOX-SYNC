@@ -47,15 +47,21 @@ public final class SplitScreen {
         Gdx.gl.glViewport(0, 0, screenW, screenH);
     }
 
-    // Keeps CAM_H and adjusts the width, so a 4:3 projector isn't squashed
     public static void fitCameras(Player p1, Player p2) {
+        fitCameras(p1, p2, CAM_H);
+    }
+
+    // Keeps camH and adjusts the width, so a 4:3 projector isn't squashed. Levels whose art is
+    // drawn from further off pass a taller view, which shows more world without magnifying the
+    // art any harder - that is what keeps a wide map sharp instead of mushy
+    public static void fitCameras(Player p1, Player p2, float camH) {
         float bbW = Gdx.graphics.getBackBufferWidth();
         float bbH = Gdx.graphics.getBackBufferHeight();
         if (bbW <= 0f || bbH <= 0f) return; // minimised window
         float halfW = (bbW - DIVIDER) / 2f;
-        float camW = CAM_H * (halfW / bbH);
-        p1.setCameraViewport(camW, CAM_H);
-        p2.setCameraViewport(camW, CAM_H);
+        float camW = camH * (halfW / bbH);
+        p1.setCameraViewport(camW, camH);
+        p2.setCameraViewport(camW, camH);
     }
 
     // The default font looks blocky when scaled without this

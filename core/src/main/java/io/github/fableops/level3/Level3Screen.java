@@ -36,6 +36,12 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
 
     private static final String TITLE = "THE WARDEN";
 
+    // Twice the usual view. The city art is 1536x1024, and at the standard 720 the world scale
+    // needed to keep the operators in proportion magnified it about 4.5x, which turned it to mush.
+    // Pulling the camera back instead lands at about 2.25x - sharper than the other levels - and
+    // shows roughly half the city at once
+    private static final float CAM_HEIGHT = 1440f;
+
     private static final float ATTACK_RANGE = 120f;
     private static final int ATTACK_DAMAGE = 15;
     private static final int CONTACT_DAMAGE = 10; // per second of contact
@@ -77,6 +83,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
 
     private boolean debugCollisionVisible = false; // F1
     private boolean missionFailed = false;
+    // Both operators stood on the trigger strip. The Warden encounter itself is not built yet
+    private boolean bossStarted = false;
     private boolean failureScenePending = false;
     private float failureSceneTimer = 0f;
     private String failureCause = "";
@@ -122,7 +130,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         player1.setWorld(world, 1);
         player2.setWorld(world, 2);
         player2.setAlternateRightKey(Input.Keys.L);
-        SplitScreen.fitCameras(player1, player2);
+        SplitScreen.fitCameras(player1, player2, CAM_HEIGHT);
         world.placeAtSpawn(player1, true);
         world.placeAtSpawn(player2, false);
 
@@ -185,6 +193,11 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         }
 
         updateSwarms(delta);
+        // Both machines have both players, so both reach the same answer without a message,
+        // the same way Level 2 settles exitReached
+        if (!missionFailed && !bossStarted && world.bothOnBossTrigger(player1, player2)) {
+            bossStarted = true;
+        }
         showFailureWhenReady(delta);
         SplitScreen.drawHalves(this, player1, player2);
         drawUI();
@@ -314,6 +327,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         remoteHackerP1.clear();
         remoteHackerP2.clear();
         missionFailed = false;
+        bossStarted = false;
         failureScenePending = false;
         failureCause = "";
         resetPlayer(player1, true);
@@ -331,7 +345,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     @Override
     public void drawHalf(OrthographicCamera camera) {
         world.render(batch, camera);
-        world.renderOverlays(shape, camera);
+        world.renderOverlays(shape, camera, bossStarted);
         if (debugCollisionVisible) world.renderDebugCollision(batch, camera);
 
         batch.setProjectionMatrix(camera.combined);
@@ -349,6 +363,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         }
         player1.draw(batch);
         player2.draw(batch);
+        // Last, so it covers anyone on the road behind the tower
+        world.renderOverhang(batch);
         batch.end();
     }
 
@@ -364,7 +380,9 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     }
 
     private String objective() {
-        return "Hold the line against the Warden's constructs.";
+        return bossStarted
+            ? "The Warden answers. Hold the line."
+            : "Walk the road together, then both stand on the marked strip.";
     }
 
     @Override
@@ -374,7 +392,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     public void resize(int w, int h) {
         // Uses the back buffer size instead of w and h (HiDPI)
         ui.update();
-        SplitScreen.fitCameras(player1, player2);
+        SplitScreen.fitCameras(player1, player2, CAM_HEIGHT);
     }
 
     @Override public void pause() {}

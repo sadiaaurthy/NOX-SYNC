@@ -61,6 +61,19 @@ public class Level2Controller {
         if (hostSession != null) hostSession.send(new CoreStateMessage(core.getState(), core.getCarrierId()));
     }
 
+    // Debug only (K). Takes the core, then seats it on the next press, without walking
+    // either operator anywhere. Player 1 carries it, the same as a normal pickup would
+    public void debugToggleCore() {
+        if (core.getState() == CoreObject.State.IN_SOCKET) return;
+        if (core.getState() == CoreObject.State.ON_PEDESTAL) {
+            core.set(CoreObject.State.CARRIED, 1);
+        } else {
+            core.set(CoreObject.State.IN_SOCKET, 0);
+            world.openExit();
+        }
+        if (hostSession != null) hostSession.send(new CoreStateMessage(core.getState(), core.getCarrierId()));
+    }
+
     public void interactLoot(int playerId, int lootId) {
         Player player = (playerId == 1) ? player1 : player2;
         LootDrop drop = loot.findReachablePickup(player, core.getState());

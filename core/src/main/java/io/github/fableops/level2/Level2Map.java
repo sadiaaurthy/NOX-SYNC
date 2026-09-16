@@ -50,6 +50,9 @@ public class Level2Map implements Collidable {
     private final Rectangle socketZone;
     private boolean exitOpen = false;
 
+    // Keeps a wave from landing right on top of the exit
+    private static final float EXIT_SPAWN_MARGIN = 90f;
+
     public Level2Map() {
         background = new Texture(Gdx.files.internal("Level2Map.png"));
         worldW = background.getWidth();
@@ -140,6 +143,13 @@ public class Level2Map implements Collidable {
     @Override
     public boolean collides(float x, float y, float w, float h, int playerSide) {
         return mask.blocksBox(x, y, w, h, exitOpen ? WALK_OPEN : WALK_SEALED);
+    }
+
+    // The exit is the road to Level 3, so no enemy is ever dropped into it or at its mouth
+    @Override
+    public boolean blocksSpawn(float x, float y, float w, float h, int playerSide) {
+        if (collides(x, y, w, h, playerSide)) return true;
+        return withinMargin(exitZone, x + w / 2f, y + h / 2f, EXIT_SPAWN_MARGIN);
     }
 
     // Random loot placement: plain floor only, clear of walls and clear of every special zone
