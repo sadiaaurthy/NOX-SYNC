@@ -4,11 +4,11 @@ package io.github.fableops;
 // the other side gets the other one. That's why nothing has to negotiate a second value over the network
 public enum Role {
 
-    BREAKER("THE BREAKER", "VANGUARD", "brawlspritesheet", "brawlSelectionImage.png",
-        "Goes in first and breaks what's in the way. Heavy melee, and the one who holds the line."),
+        BREAKER("KADE", "THE BREAKER", "brawlspritesheet", "brawlSelectionImage.png",
+            "Goes in first and breaks what's in the way. Heavy melee, and the one who holds the line."),
 
-    LISTENER("THE LISTENER", "SIGNAL", "hackerspritesheet", "hackerSelectionImage.png",
-        "Hears what the station won't say. Clean terminal work, and the steadier hand at range.");
+        LISTENER("WREN", "THE LISTENER", "hackerspritesheet", "hackerSelectionImage.png",
+            "Hears what the station won't say. Clean terminal work, and the steadier hand at range.");
 
     private final String callSign;
     private final String archetype;
