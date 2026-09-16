@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.Screen;
@@ -23,8 +24,10 @@ import io.github.fableops.level2.loot.LootField;
 import io.github.fableops.level2.network.CoreInteractRequestMessage;
 import io.github.fableops.level2.network.CoreStateMessage;
 import io.github.fableops.level2.network.GunStateMessage;
+import io.github.fableops.level2.network.Level3StartMessage;
 import io.github.fableops.level2.network.LootInteractRequestMessage;
 import io.github.fableops.level2.network.LootPickedUpMessage;
+import io.github.fableops.level3.Level3Screen;
 import io.github.fableops.network.GameClient;
 import io.github.fableops.network.GameServer;
 import io.github.fableops.network.PlayerInput;
@@ -65,6 +68,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     // A fallen player's death animation plays out before the mission failed window
     private static final float FAILURE_SCENE_DELAY = Player.DEATH_DURATION + 0.4f;
 
+    private final Game game;
     private final SpriteBatch batch = new SpriteBatch();
     private final ShapeRenderer shape = new ShapeRenderer();
     private final UiViewport ui = new UiViewport();
@@ -102,6 +106,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     private float waveTimer = FIRST_WAVE_DELAY;
     private float stateTimer = 0f;
     private boolean disposed = false;
+    private boolean advancingToLevel3 = false; // guards advanceToLevel3() against running twice
 
     // Client only: the host's swarm as last reported
     private final List<float[]> remoteEnemiesP1 = new ArrayList<>();
@@ -110,9 +115,9 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     private final List<float[]> positionBufferP1 = new ArrayList<>();
     private final List<float[]> positionBufferP2 = new ArrayList<>();
 
-    public Level2Screen(GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession,
-                        StoryGate story, Role sideOneRole) {
-        this(server, client, hostSession, clientSession, story, sideOneRole,
+    public Level2Screen(Game game, GameServer server, GameClient client, HostSession hostSession,
+                        ClientSession clientSession, StoryGate story, Role sideOneRole) {
+        this(game, server, client, hostSession, clientSession, story, sideOneRole,
             new Player(sideOneRole.sheetName(), 0f, 0f, Input.Keys.W, Input.Keys.S, Input.Keys.A, Input.Keys.D, null, 1),
             new Player(sideOneRole.other().sheetName(), 0f, 0f, Input.Keys.UP, Input.Keys.DOWN, Input.Keys.LEFT, Input.Keys.RIGHT, null, 2),
             new EnemySprites(), new Hud(), new PlayerInventories(), new Random().nextLong());
@@ -120,9 +125,10 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
 
     // lootSeed: same value on host and client (relayed in Level2StartMessage) so both machines
     // roll the same random loot layout instead of the client generating its own
-    public Level2Screen(GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession,
-                        StoryGate story, Role sideOneRole, Player player1, Player player2,
+    public Level2Screen(Game game, GameServer server, GameClient client, HostSession hostSession,
+                        ClientSession clientSession, StoryGate story, Role sideOneRole, Player player1, Player player2,
                         EnemySprites enemySprites, Hud hud, PlayerInventories inventories, long lootSeed) {
+        this.game = game;
         this.sideOneRole = sideOneRole;
         this.server = server;
         this.client = client;
@@ -188,6 +194,9 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
             case "LEVEL_RESTART":
                 restartLocalState();
                 break;
+            case "LEVEL3_START":
+                advanceToLevel3();
+                break;
             default:
                 break;
         }
@@ -222,11 +231,30 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         updateSwarm(delta);
         if (!missionFailed && !exitReached && world.isExitOpen()) {
             exitReached = world.isInExit(player1) && world.isInExit(player2);
-            if (exitReached) story.begin(StoryBeat.LEVEL_3);
         }
         showFailureWhenReady(delta);
         SplitScreen.drawHalves(this, player1, player2);
         drawUI();
+        // Has to be last, advancing disposes this screen
+        checkExitToLevel3();
+    }
+
+    // The host decides, the client waits for LEVEL3_START
+    private void checkExitToLevel3() {
+        if ((!isHost && !isDebug) || missionFailed || !exitReached) return;
+        advanceToLevel3();
+    }
+
+    private void advanceToLevel3() {
+        if (advancingToLevel3) return;
+        advancingToLevel3 = true;
+        story.begin(StoryBeat.LEVEL_3);
+        if (hostSession != null) hostSession.send(new Level3StartMessage());
+        Level3Screen next = new Level3Screen(server, client, hostSession, clientSession, story, sideOneRole,
+            player1, player2, hud, inventories);
+        disposed = true;
+        disposeLevel2OnlyResources();
+        game.setScreen(next);
     }
 
     // Debug: both players on one keyboard, left mouse button for player 1 and right for player 2.
@@ -490,7 +518,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     }
 
     private String objective() {
-        if (exitReached) return "Exit reached. Level 3 isn't built yet.";
+        if (exitReached) return "Exit reached. Proceeding to the Warden...";
         return switch (core.getState()) {
             case ON_PEDESTAL -> "Find the Unstable Core on its pedestal and take it.";
             case CARRIED -> "Carry the core to the reactor socket.";
@@ -516,19 +544,25 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     public void dispose() {
         if (disposed) return;
         disposed = true;
-        batch.dispose();
-        shape.dispose();
+        disposeLevel2OnlyResources();
         inventories.dispose();
         player1.dispose();
         player2.dispose();
-        world.dispose();
-        core.dispose();
-        loot.dispose();
-        enemySprites.dispose();
         hud.dispose();
         if (server != null) server.stop();
         if (client != null) client.stop();
         if (hostSession != null) hostSession.stop();
         if (clientSession != null) clientSession.stop();
+    }
+
+    // Only resources exclusive to Level 2 and not passed to Level 3 (player1/player2/hud/inventories
+    // carry forward; Level 3 has its own enemy visuals, so the drone enemySprites doesn't)
+    private void disposeLevel2OnlyResources() {
+        batch.dispose();
+        shape.dispose();
+        world.dispose();
+        core.dispose();
+        loot.dispose();
+        enemySprites.dispose();
     }
 }

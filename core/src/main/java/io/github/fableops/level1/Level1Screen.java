@@ -363,7 +363,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         advancing = true;
         story.begin(StoryBeat.LEVEL_2);
         if (hostSession != null) hostSession.send(new Level2StartMessage(lootSeed));
-        Level2Screen next = new Level2Screen(server, client, hostSession, clientSession, story, sideOneRole,
+        Level2Screen next = new Level2Screen(game, server, client, hostSession, clientSession, story, sideOneRole,
             player1, player2, enemySprites, hud, inventories, lootSeed);
         disposed = true;
         disposeLevel1OnlyResources();
