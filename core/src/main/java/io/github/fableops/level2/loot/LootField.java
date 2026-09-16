@@ -19,7 +19,14 @@ import io.github.fableops.level2.Level2Map;
 // only unlocks while the core is being carried, which is the push-your-luck part of the level
 public class LootField {
 
+    // Also the clearance a rolled loot spot has to fit, so this stays at the old footprint
     private static final float MARKER_SIZE = 60f;
+    // Drawn at 80% of that and 70% opacity, so a marker reads as a hint on the floor
+    private static final float ICON_SIZE = MARKER_SIZE * 0.8f;
+    private static final float ICON_ALPHA = 0.7f;
+    private static final float LOCKED_ALPHA = 0.245f;
+    // Pulse kept proportional to the smaller icon
+    private static final float ICON_PULSE = 3.2f;
 
     // Randomised layout: same seed on host and client, via Level2StartMessage, so both
     // machines place loot identically without either one dictating to the other over the network
@@ -168,8 +175,8 @@ public class LootField {
             LootDrop drop = drops.get(i);
             if (drop.isCollected()) continue;
             boolean locked = !unlocked(drop, coreState);
-            float alpha = locked ? 0.35f : 0.85f + pulse * 0.15f;
-            float size = MARKER_SIZE + (locked ? 0f : pulse * 4f);
+            float alpha = locked ? LOCKED_ALPHA : ICON_ALPHA * (0.85f + pulse * 0.15f);
+            float size = ICON_SIZE + (locked ? 0f : pulse * ICON_PULSE);
             batch.setColor(1f, 1f, 1f, alpha);
             batch.draw(drop.getItem().getIcon(), drop.centreX() - size / 2f, drop.centreY() - size / 2f, size, size);
         }
