@@ -1,84 +1,122 @@
 # FableOps: Synchronized Survival
 
-## Overview
+A 2-player cooperative LAN top-down survival game built with Java 21, libGDX, and JavaFX.
 
-FableOps: Synchronized Survival is a 2-player cooperative LAN-based top-down cyberpunk survival game developed using Java and libGDX.
-
-Two players connect over a local network, cooperate to survive enemy encounters, complete objectives, and progress through a shared game world.
-
-This project is being developed as part of the CSE 4402: Visual Programming Lab course.
+Developed for the CSE 4402: Visual Programming Lab course at the Islamic University of Technology (IUT).
 
 ---
 
-## Features
+## Presentation Video
 
-* 2-player cooperative gameplay
-* LAN-based multiplayer synchronization
-* Shared game world and objectives
-* Real-time player movement and interaction
-* Enemy survival encounters
-* Java + libGDX implementation
+* **Video Demonstration:** [INSERT_VIDEO_LINK_HERE]
+* **GitHub Repository:** https://github.com/sadiaaurthy/NOX-SYNC
 
 ---
 
-## Project Structure
+## Project Overview
 
-### launcher
+FableOps is a 2-player cooperative game played over a local area network. Two players connect as a stabilization team sent into Meridian Deep-Core Station, an underground research facility that went dark after its prototype clean-energy reactor (the Unstable Core) became unstable. The station's defense AI, the Warden, locked down the facility after safety overrides were bypassed, mistaking the operators for intruders.
 
-The JavaFX main menu: host, join or debug. It connects the two machines, then opens the game window, and comes back when the window closes.
+The game requires two players to coordinate in real time:
+* **The Breaker (Kade):** Melee-focused operator who clears obstacles and fights drones up close.
+* **The Listener (Wren):** Technical operator who interacts with terminals and provides ranged fire support.
 
-### core
-
-The game itself: levels, players, enemies, collision, inventory, HUD and networking.
-
-### lwjgl3
-
-The desktop game window (LWJGL3 backend). The game's assets are packaged from `assets/`; the `.psd` files are the editable art sources and are not shipped.
+### SDG Alignment
+The project aligns with two United Nations Sustainable Development Goals:
+* **SDG 7 (Affordable and Clean Energy):** The plot focuses on containing a prototype clean-energy reactor to prevent environmental contamination and protect research investments.
+* **SDG 9 (Industry, Innovation, and Infrastructure):** The game's scenario deals with the failure of critical infrastructure caused by bypassing safety protocols under time pressure. Progress requires following dual-operator safety protocols.
 
 ---
 
 ## Technologies Used
 
-* Java 21
-* libGDX
-* JavaFX
-* Gradle
-* Socket-based LAN networking
+* **Java 21:** Primary programming language.
+* **libGDX (1.13.1):** Core game engine handling 2D rendering, sprites, camera management, and game loops.
+* **LWJGL3:** Desktop backend for window creation and OpenGL context handling.
+* **JavaFX 21:** Used for the main menu launcher, operator selection screen, and scenario dialogue windows.
+* **Java Sockets (`java.net`):** Custom TCP socket architecture for local multiplayer synchronization.
+* **Gradle:** Multi-project build automation (`launcher`, `core`, `lwjgl3`).
 
 ---
 
-## Running the Project
+## Implementation Details
 
-In VS Code press `Ctrl+Shift+B`. It builds with Gradle and then starts the installed game, so Gradle isn't kept busy while you play.
+### 1. Hybrid JavaFX and libGDX Architecture
+The project combines JavaFX and libGDX to balance UI layout flexibility with fast 2D rendering:
+* **Launcher (`launcher` module):** Uses JavaFX with FXML and CSS to manage the main menu, host/join controls, character selection, and pre-level story dialogs.
+* **Game Window (`core` and `lwjgl3` modules):** Runs libGDX on top of LWJGL3, capped at 30 FPS to limit hardware load during split-screen rendering.
+* **Pre-warmed Context:** Starting an LWJGL3 window takes roughly 440ms. The launcher initializes the libGDX window in a background thread while players are still in the menu. When the match starts, the JavaFX stage hides and the game window displays immediately with no loading pause.
 
-From a terminal:
+### 2. Dual-Socket Networking
+The multiplayer architecture runs on an authoritative host model over two separate TCP sockets:
+* **Movement Stream (Port 9090):** The client polls keyboard inputs and sends a `PlayerInput` packet to the host. The host updates player coordinates, runs collision checks, and broadcasts a `WorldState` packet back at 60 Hz.
+* **Event Channel (Port 9091):** Runs a line-based protocol (`TYPE|body`) for discrete game events like terminal inputs, door states, health sync, and loot pickups. A message queue parks incoming packets if they arrive while a new level screen is still loading, preventing dropped events.
+* **Role Negotiation:** If both players try to select the same role at the same time, the host takes priority and the client automatically switches to the other operator, avoiding a network deadlock.
 
+### 3. Split-Screen Viewports and Cameras
+* The game renders split-screen locally on both machines using `SplitScreen.java`.
+* Each half of the screen has its own `OrthographicCamera` tracking its respective player.
+* Camera positions are clamped to map boundaries so viewports never scroll outside the playable area.
+
+### 4. Collision and Pathfinding
+* **Collision Masks:** Obstacles are defined by dedicated collision bitmap images (`Level1Mapcollision.png`, `Level2Mapcollision.png`). The game samples pixel alpha to block illegal moves.
+* **Separated Hitboxes:** Feet hitboxes check wall collisions, while taller body hitboxes handle enemy contact damage and melee weapon reach.
+* **Drone Steering:** Swarm enemies follow the nearest player. If a drone's progress drops below 35% of its speed for 0.35 seconds, it enters a 0.55-second detour state to slide around the wall.
+
+### 5. Combat and Ballistics
+* **Melee:** Basic swings deal 15 damage in a 120-unit forward radius, playing through an 8-frame attack animation.
+* **Sidearm:** Fires up to 520 units. Targets are filtered within a 35-degree forward cone (`AIM_COS = 0.82f`). The shot traces line-of-sight against the collision mask in 12-unit steps so bullets cannot pass through walls. The weapon uses a 12-round magazine, 24 spare rounds, and a 1.5-second reload cooldown.
+
+### 6. Cooperative Mechanics
+* **Level 1 Terminals:** Three stages (binary conversion, symbol cipher, cross-dependent formula). Incorrect submissions increase the Alert Meter by 15 points and spawn enemy waves. Players must stand on two separate pressure plates at the same time to open the exit door.
+* **Level 2 Core Transport:** Carrying the reactor core increases enemy wave frequency from 8 seconds to 4 seconds and increases wave sizes. High-tier gear caches remain locked until the core is being carried.
+* **Shared Inventory:** Players have a 5x5 inventory grid and a single shared slot. Putting an item in the shared slot allows the other player to take it, enabling sharing of medkits and ammo mid-combat.
+
+---
+
+## Controls
+
+| Action | Host / Player 1 | Client / Player 2 | Debug Mode (Single PC) |
+|---|---|---|---|
+| Movement | W, A, S, D | W, A, S, D | P1: WASD / P2: Arrow Keys |
+| Melee Attack | Left Mouse Button | Right Mouse Button | P1: Left Click / P2: Right Click |
+| Shoot Sidearm | Hold Attack | Hold Attack | P1: Left Click / P2: Right Click |
+| Reload Weapon | R | R | P1: R / P2: Right Ctrl |
+| Interact (Terminals / Core) | E | E | E |
+| Pick Up Loot | G | G | G |
+| Toggle Inventory | 1 | 2 | P1: 1 / P2: 2 |
+| Navigate Inventory | W, A, S, D | W, A, S, D | Movement Keys |
+| Toggle Collision Overlay | F1 | F1 | F1 |
+| Cycle UI Scale | F2 | F2 | F2 |
+| Exit / Cancel | ESC | ESC | ESC |
+
+---
+
+## How to Build and Run
+
+### Requirements
+* JDK 21 installed and configured on PATH.
+
+### Option 1: VS Code (Recommended)
+Press `Ctrl+Shift+B`. 
+
+This executes the default build task configured in `.vscode/tasks.json` (`Build FableOps` followed by `Run FableOps`). It runs `./gradlew launcher:installDist` and starts the installed application binary directly, ensuring Gradle does not consume background memory or CPU while playing.
+
+### Option 2: Terminal
+
+**Windows:**
+```powershell
+.\gradlew.bat launcher:installDist
+.\launcher\build\install\launcher\bin\launcher.bat
+```
+
+**Linux / macOS:**
 ```bash
 ./gradlew launcher:installDist
 ./launcher/build/install/launcher/bin/launcher
 ```
 
-Windows:
-
-```bash
-gradlew.bat launcher:installDist
-launcher\build\install\launcher\bin\launcher.bat
-```
-
-To test LAN on one PC, run only the second line again for the second copy; it starts without Gradle. `gradlew launcher:run` still works, but it keeps Gradle busy until the game closes, so a second copy has to wait for a new Gradle daemon.
-
----
-
-## Team
-
-FableOps Development Team
-
-Islamic University of Technology (IUT)
-
-Department of Computer Science and Engineering
-
----
-
-## License
-
-This project is developed for academic and educational purposes.
+### Connection Options
+* **LAN Play:** The host selects `H` on the main menu to display their local IP address. The client inputs that IP address and selects `J`.
+* **Local Play (Same PC):** Run the launch command twice. Host on the first window (`H`), then select `L` on the second window to connect through `127.0.0.1`.
+* **Debug Mode:** Press `D` on the launcher to play both characters on a single screen with split keyboard controls.
