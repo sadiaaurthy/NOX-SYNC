@@ -7,18 +7,15 @@ import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.Screen;
-import com.badlogic.gdx.graphics.Color;
-import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.Rectangle;
-import com.badlogic.gdx.utils.Align;
 
-import io.github.fableops.Enemy;
 import io.github.fableops.EnemySprites;
 import io.github.fableops.Player;
+import io.github.fableops.Role;
 import io.github.fableops.SwarmController;
 import io.github.fableops.inventory.PlayerInventories;
 import io.github.fableops.level1.controller.Level1Controller;
@@ -26,7 +23,6 @@ import io.github.fableops.level1.controller.Level1Listener;
 import io.github.fableops.level1.model.AlertMeter;
 import io.github.fableops.level1.network.AlertMeterUpdateMessage;
 import io.github.fableops.level1.network.CodeFragmentPayload;
-import io.github.fableops.level1.network.EnemyStateMessage;
 import io.github.fableops.level1.network.EnteredDigitMessage;
 import io.github.fableops.level1.network.Level2StartMessage;
 import io.github.fableops.level2.Level2Screen;
@@ -34,11 +30,15 @@ import io.github.fableops.network.GameClient;
 import io.github.fableops.network.GameServer;
 import io.github.fableops.network.PlayerInput;
 import io.github.fableops.network.WorldState;
+import io.github.fableops.network.messages.EnemyStateMessage;
 import io.github.fableops.network.session.ClientSession;
 import io.github.fableops.network.session.HostSession;
+import io.github.fableops.story.StoryBeat;
+import io.github.fableops.story.StoryGate;
 import io.github.fableops.ui.SplitScreen;
 import io.github.fableops.ui.UiViewport;
 import io.github.fableops.ui.hud.CodePopupUI;
+import io.github.fableops.ui.hud.Hud;
 
 // Level 1: solve the terminals, hold both plates, then walk through the exit gate together
 // Movement goes through GameServer/GameClient, everything else through the message channel
@@ -49,13 +49,9 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
     private static final int CONTACT_DAMAGE = 10; // per second of contact
     // Enemy updates are sent 20 times a second, not every frame
     private static final float ENEMY_STATE_INTERVAL = 1f / 20f;
-
-    private static final float BANNER_TITLE_SCALE = 3.0f;
-    private static final float BANNER_TEXT_SCALE = 1.6f;
-    private static final Color COLOR_PANEL_BG = new Color(0.04f, 0.043f, 0.047f, 0.97f);
-    private static final Color COLOR_PANEL_BORDER = new Color(0.29f, 0.24f, 0.18f, 1f);
-    private static final Color COLOR_TEXT = new Color(0.93f, 0.93f, 0.91f, 1f);
-    private static final Color COLOR_DIM = new Color(0.45f, 0.45f, 0.42f, 1f);
+    // A fallen player's death animation plays out before the mission failed window
+    private static final float FAILURE_SCENE_DELAY = Player.DEATH_DURATION + 0.4f;
+    private static final String ALERT_MAXED = "The alert meter maxed out.";
     private static final String DEBUG_FOCUS_P1 = "SPACE = switch terminal   (typing into: player 1)";
     private static final String DEBUG_FOCUS_P2 = "SPACE = switch terminal   (typing into: player 2)";
 
@@ -69,17 +65,20 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
 
     private final SpriteBatch batch = new SpriteBatch();
     private final ShapeRenderer shape = new ShapeRenderer();
-    // Shared by the HUD, the terminals and the banner, each sets its own scale
+    // Shared by the HUD and the terminals, each sets its own scale
     private final BitmapFont font = new BitmapFont();
     private final UiViewport ui = new UiViewport();
     private final PlayerInventories inventories = new PlayerInventories();
     private final Level1Map world = new Level1Map();
+    private final Hud hud = new Hud();
     private final EnemySprites enemySprites = new EnemySprites();
     private final SwarmController swarm = new SwarmController(enemySprites);
     private final Player player1;
     private final Player player2;
     // null on the client
     private final Level1Controller controller;
+    // Side 1's operator. Side 2 always gets the other one, and Level 2 inherits the pair
+    private final Role sideOneRole;
 
     // The host uses popupP1 and the client popupP2, debug can have both open
     private final CodePopupUI popupP1 = new CodePopupUI(font);
@@ -96,7 +95,9 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
     private boolean plateP1Held = false;
     private boolean plateP2Held = false;
     private boolean missionFailed = false;
-    private String missionFailedReason = "";
+    private boolean failureScenePending = false;
+    private float failureSceneTimer = 0f;
+    private String failureCause = "";
     private boolean advancing = false; // guards advanceToLevel2() against running twice
     private boolean disposed = false;
 
@@ -107,13 +108,18 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
     // Host only, reused for every enemy snapshot
     private final List<float[]> positionBufferP1 = new ArrayList<>();
     private final List<float[]> positionBufferP2 = new ArrayList<>();
+    // Holds the game on a scenario window until both players confirm it
+    private final StoryGate story;
 
-    public Level1Screen(Game game, GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession) {
+    public Level1Screen(Game game, GameServer server, GameClient client, HostSession hostSession,
+                        ClientSession clientSession, StoryGate story, Role sideOneRole) {
         this.game = game;
+        this.sideOneRole = sideOneRole;
         this.server = server;
         this.client = client;
         this.hostSession = hostSession;
         this.clientSession = clientSession;
+        this.story = story;
         this.isHost = (server != null);
         this.isDebug = (server == null && client == null);
 
@@ -121,17 +127,17 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
 
         float[] spawnP1 = world.getSpawnP1();
         float[] spawnP2 = world.getSpawnP2();
-        player1 = new Player("brawlspritesheet.png", "brawlspritesheetAttacking.png", spawnP1[0], spawnP1[1],
+        player1 = new Player(sideOneRole.sheetName(), spawnP1[0], spawnP1[1],
             Input.Keys.W, Input.Keys.S, Input.Keys.A, Input.Keys.D, world, 1);
         // Arrow keys are only used in debug, a real client sends its own WASD
-        player2 = new Player("hackerspritesheet.png", "hackerspritesheetAttacking.png", spawnP2[0], spawnP2[1],
+        player2 = new Player(sideOneRole.other().sheetName(), spawnP2[0], spawnP2[1],
             Input.Keys.UP, Input.Keys.DOWN, Input.Keys.LEFT, Input.Keys.RIGHT, world, 2);
         player2.setAlternateRightKey(Input.Keys.L);
         SplitScreen.fitCameras(player1, player2);
 
         if (isHost || isDebug) {
             controller = new Level1Controller(hostSession, new PuzzleListener());
-            if (hostSession != null) hostSession.setListener(controller.asMessageListener());
+            if (hostSession != null) hostSession.setListener(story.wrap(controller.asMessageListener()));
             popupP1.setSubmitListener(controller::submitFromLocalPlayer);
             if (isDebug) {
                 popupP2.setSubmitListener((position, guess) ->
@@ -141,7 +147,8 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         } else {
             controller = null;
             // Messages come in on the network thread, so handle them on the render thread
-            clientSession.setListener((type, body) -> Gdx.app.postRunnable(() -> onHostMessage(type, body)));
+            clientSession.setListener(story.wrap((type, body) ->
+                Gdx.app.postRunnable(() -> onHostMessage(type, body))));
             popupP2.setSubmitListener((position, guess) ->
                 clientSession.send(new EnteredDigitMessage(position, guess, 2)));
         }
@@ -186,7 +193,8 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
 
         @Override
         public void onMissionFailed() {
-            triggerMissionFailed("Alert Meter maxed out!");
+            // Nobody fell, so the window can come up straight away
+            triggerMissionFailed(ALERT_MAXED, 0f);
         }
     }
 
@@ -199,7 +207,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
                 break;
             case "ALERT_METER_UPDATE":
                 setAlertMeter(AlertMeterUpdateMessage.deserialize(body).getValue());
-                if (alertMeterValue >= AlertMeter.MAX_VALUE) triggerMissionFailed("Alert Meter maxed out!");
+                if (alertMeterValue >= AlertMeter.MAX_VALUE) triggerMissionFailed(ALERT_MAXED, 0f);
                 break;
             case "REACTOR_UNLOCK":
                 unlockReactor();
@@ -212,7 +220,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
                 remoteEnemiesP2.addAll(state.getEnemiesP2());
                 player1.health = state.getHealthP1();
                 player2.health = state.getHealthP2();
-                if (player1.health <= 0 || player2.health <= 0) triggerMissionFailed("A player was eliminated!");
+                checkForDeath();
                 break;
             case "WRONG_ANSWER":
                 popupP2.close();
@@ -231,7 +239,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
     private void setAlertMeter(int value) {
         if (value == alertMeterValue) return;
         alertMeterValue = value;
-        alertLabel = "Alert Meter: " + value;
+        alertLabel = "ALERT METER  " + value;
     }
 
     private void unlockReactor() {
@@ -249,9 +257,11 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         remoteEnemiesP2.clear();
         setAlertMeter(0);
         missionFailed = false;
-        missionFailedReason = "";
+        failureScenePending = false;
+        failureCause = "";
         resetPlayer(player1, world.getSpawnP1());
         resetPlayer(player2, world.getSpawnP2());
+        story.closeFailure();
     }
 
     private static void resetPlayer(Player player, float[] spawn) {
@@ -260,20 +270,50 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         player.placeAt(spawn[0], spawn[1]);
     }
 
-    private void triggerMissionFailed(String reason) {
+    // Host after contact damage, client when the host reports health
+    private void checkForDeath() {
+        boolean breakerDown = player1.health <= 0f;
+        boolean listenerDown = player2.health <= 0f;
+        if (!breakerDown && !listenerDown) return;
+        triggerMissionFailed(StoryGate.fallen(breakerDown, listenerDown), FAILURE_SCENE_DELAY);
+    }
+
+    private void triggerMissionFailed(String cause, float sceneDelay) {
         if (missionFailed) return;
         missionFailed = true;
-        missionFailedReason = reason;
+        failureCause = cause;
+        failureScenePending = true;
+        failureSceneTimer = sceneDelay;
         popupP1.close();
         popupP2.close();
     }
 
-    // The connections carry over to Level 2, so only this screen's own resources are freed
+    // Waits for the death animation, then puts up the mission failed window
+    private void showFailureWhenReady(float delta) {
+        if (!failureScenePending) return;
+        failureSceneTimer -= delta;
+        if (failureSceneTimer > 0f) return;
+        failureScenePending = false;
+        story.showFailure("MAIN SCENARIO #1 — FAILED",
+            "The station noticed them before they reached the gate. Not every telling ends at the reactor; "
+                + "this one stops here, in the dark, and begins again.",
+            new String[][]{
+                {"Cause", failureCause},
+                {"Penalty", "Terminal progress and the alert meter reset."},
+                {"Retry", controller != null ? "Press ENTER to restart the scenario."
+                    : "The host restarts the scenario."}
+            },
+            controller != null ? controller::restartLevel1 : null);
+    }
+
+    // The connections carry over to Level 2, so only this screen's own resources are freed.
+    // The scenario window goes up first, so Level 2 loads behind it
     private void advanceToLevel2() {
         if (advancing) return;
         advancing = true;
+        story.begin(StoryBeat.LEVEL_2);
         if (hostSession != null) hostSession.send(new Level2StartMessage());
-        Level2Screen next = new Level2Screen(server, client, hostSession, clientSession);
+        Level2Screen next = new Level2Screen(server, client, hostSession, clientSession, story, sideOneRole);
         disposed = true;
         disposeLocalResources();
         game.setScreen(next);
@@ -286,10 +326,6 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !uiPanelOpen) {
             Gdx.app.exit();
             return;
-        }
-        // Only the host restarts, the client waits for LEVEL_RESTART
-        if (missionFailed && controller != null && Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
-            controller.restartLevel1();
         }
         if (Gdx.input.isKeyJustPressed(Input.Keys.F1)) debugCollisionVisible = !debugCollisionVisible;
         // F2 = UI size, for projectors
@@ -309,7 +345,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         } else if (isHost) {
             updateAsHost(delta);
         } else {
-            updateAsClient(delta);
+            updateAsClient();
         }
 
         handlePuzzleInteraction();
@@ -318,6 +354,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         // The gate stays open once both plates were held
         if (reactorUnlocked && plateP1Held && plateP2Held) world.openExitGate();
         updateSwarm(delta);
+        showFailureWhenReady(delta);
         SplitScreen.drawHalves(this, player1, player2);
         drawUI();
         // Has to be last, advancing disposes this screen
@@ -331,7 +368,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         if (player1.colliderOverlaps(gate) && player2.colliderOverlaps(gate)) advanceToLevel2();
     }
 
-    // Only hits when a new swing starts, so holding the key hits once per animation
+    // Only hits when a new swing starts, so holding the button hits once per animation
     private void attack(int side, Player player, boolean pressed) {
         if (pressed && player.startAttack()) {
             swarm.attackNearest(side, player.centreX(), player.centreY(), ATTACK_RANGE, ATTACK_DAMAGE);
@@ -344,7 +381,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
             swarm.update(delta, player1, player2, world);
             if (swarm.isTouchingAny(1, player1)) player1.takeDamage(CONTACT_DAMAGE * delta);
             if (swarm.isTouchingAny(2, player2)) player2.takeDamage(CONTACT_DAMAGE * delta);
-            if (player1.health <= 0 || player2.health <= 0) triggerMissionFailed("A player was eliminated!");
+            checkForDeath();
         }
         if (hostSession == null) return;
 
@@ -352,33 +389,26 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         if (enemyStateTimer < ENEMY_STATE_INTERVAL) return;
         enemyStateTimer = 0f;
         hostSession.send(new EnemyStateMessage(
-            toPositions(swarm.getEnemiesP1(), positionBufferP1),
-            toPositions(swarm.getEnemiesP2(), positionBufferP2),
+            swarm.positions(1, positionBufferP1),
+            swarm.positions(2, positionBufferP2),
             player1.health, player2.health));
     }
 
-    // Reuses the buffer, send() turns it into a string straight away
-    private static List<float[]> toPositions(List<Enemy> enemies, List<float[]> buffer) {
-        buffer.clear();
-        for (int i = 0; i < enemies.size(); i++) buffer.add(enemies.get(i).getPosition());
-        return buffer;
-    }
-
-    // Debug: both players on one keyboard
+    // Debug: both players on one keyboard, left mouse button for player 1 and right for player 2
     private void updateAsDebug(float delta) {
         boolean p1Free = !missionFailed && !popupP1.isOpen() && !inventories.isOpen(1);
         boolean p2Free = !missionFailed && !popupP2.isOpen() && !inventories.isOpen(2);
         if (p1Free) player1.update(delta);
         if (p2Free) player2.update(delta);
-        attack(1, player1, p1Free && Gdx.input.isKeyPressed(Input.Keys.F));
-        attack(2, player2, p2Free && Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT));
+        attack(1, player1, p1Free && Gdx.input.isButtonPressed(Input.Buttons.LEFT));
+        attack(2, player2, p2Free && Gdx.input.isButtonPressed(Input.Buttons.RIGHT));
     }
 
     private void updateAsHost(float delta) {
         boolean p1Free = !missionFailed && !popupP1.isOpen() && !inventories.isOpen(1);
         if (p1Free) player1.update(delta);
 
-        // With no client connected, Player 2 plays from this keyboard.
+        // With no client connected, Player 2 plays from this keyboard and mouse.
         PlayerInput p2Input = server.isClientConnected()
             ? server.pollClientInput()
             : new PlayerInput(
@@ -386,16 +416,16 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
                 Gdx.input.isKeyPressed(Input.Keys.DOWN),
                 Gdx.input.isKeyPressed(Input.Keys.LEFT),
                 Gdx.input.isKeyPressed(Input.Keys.RIGHT),
-                Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT));
+                Gdx.input.isButtonPressed(Input.Buttons.RIGHT));
         if (!missionFailed) player2.applyInput(p2Input, delta);
 
-        attack(1, player1, p1Free && Gdx.input.isKeyPressed(Input.Keys.F));
+        attack(1, player1, p1Free && Gdx.input.isButtonPressed(Input.Buttons.LEFT));
         attack(2, player2, !missionFailed && p2Input.attack);
         server.pushState(new WorldState(player1, player2));
     }
 
-    private void updateAsClient(float delta) {
-        // The client is its own machine, so its player uses WASD and F.
+    private void updateAsClient() {
+        // The client is its own machine: WASD to move, right mouse button to attack
         boolean free = !missionFailed && !popupP2.isOpen() && !inventories.isOpen(2);
         client.pushInput(free
             ? new PlayerInput(
@@ -403,7 +433,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
                 Gdx.input.isKeyPressed(Input.Keys.S),
                 Gdx.input.isKeyPressed(Input.Keys.A),
                 Gdx.input.isKeyPressed(Input.Keys.D),
-                Gdx.input.isKeyPressed(Input.Keys.F))
+                Gdx.input.isButtonPressed(Input.Buttons.RIGHT))
             : new PlayerInput(false, false, false, false));
 
         client.pollState().applyTo(player1, player2);
@@ -490,140 +520,43 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
         if (controller != null) {
-            drawSwarm(camera, swarm.getEnemiesP1());
-            drawSwarm(camera, swarm.getEnemiesP2());
+            enemySprites.drawAll(batch, camera, swarm.getEnemiesP1());
+            enemySprites.drawAll(batch, camera, swarm.getEnemiesP2());
         } else {
-            // A client only knows positions, so it draws a standing frame.
-            drawRemoteSwarm(camera, remoteEnemiesP1);
-            drawRemoteSwarm(camera, remoteEnemiesP2);
+            enemySprites.drawRemote(batch, camera, remoteEnemiesP1);
+            enemySprites.drawRemote(batch, camera, remoteEnemiesP2);
         }
         player1.draw(batch);
         player2.draw(batch);
         batch.end();
     }
 
-    private void drawSwarm(OrthographicCamera camera, List<Enemy> enemies) {
-        for (int i = 0; i < enemies.size(); i++) {
-            Enemy e = enemies.get(i);
-            if (isOnScreen(camera, e.x, e.y)) e.draw(batch, enemySprites);
-        }
-    }
-
-    private void drawRemoteSwarm(OrthographicCamera camera, List<float[]> positions) {
-        for (int i = 0; i < positions.size(); i++) {
-            float[] pos = positions.get(i);
-            if (isOnScreen(camera, pos[0], pos[1])) {
-                enemySprites.draw(batch, enemySprites.walkFrame(0, 0f), pos[0], pos[1]);
-            }
-        }
-    }
-
-    // Skip enemies that are outside this camera's view
-    private static boolean isOnScreen(OrthographicCamera camera, float x, float y) {
-        float margin = EnemySprites.DRAW_SIZE;
-        return Math.abs(x - camera.position.x) <= camera.viewportWidth / 2f + margin
-            && Math.abs(y - camera.position.y) <= camera.viewportHeight / 2f + margin;
-    }
-
     private void drawUI() {
         OrthographicCamera uiCamera = ui.camera();
         batch.setProjectionMatrix(uiCamera.combined);
         shape.setProjectionMatrix(uiCamera.combined);
-        float margin = SplitScreen.HUD_MARGIN;
-        float step = SplitScreen.HUD_LINE_STEP;
-        float rowY = ui.height() - margin;
 
-        font.getData().setScale(SplitScreen.HUD_FONT_SCALE);
-        batch.begin();
-        font.setColor(Color.WHITE);
-        font.draw(batch, alertLabel, margin, rowY);
-        rowY -= step;
-        font.setColor(reactorUnlocked ? Color.GREEN : Color.LIGHT_GRAY);
-        font.draw(batch, objective(), margin, rowY);
-        rowY -= step;
-        if (nearTerminal) {
-            font.setColor(Color.CYAN);
-            font.draw(batch, "Press E to interact", margin, rowY);
-        }
-        rowY -= step;
-        if (isDebug && popupP1.isOpen() && popupP2.isOpen()) {
-            font.setColor(Color.ORANGE);
-            font.draw(batch, debugFocusedPlayerId == 1 ? DEBUG_FOCUS_P1 : DEBUG_FOCUS_P2, margin, rowY);
-        }
-        batch.end();
-
-        SplitScreen.drawHealthBars(shape, ui.width(), rowY - step, player1, player2);
+        hud.drawBanner(shape, batch, ui, alertLabel, objective(), prompt(),
+            alertMeterValue / (float) AlertMeter.MAX_VALUE);
+        hud.drawPlayerCards(shape, batch, ui, player1, player2, sideOneRole);
         inventories.render(shape, batch, ui.width(), ui.height(), player1, player2,
             SplitScreen.ACCENT_P1, SplitScreen.ACCENT_P2);
         popupP1.render(shape, batch, ui.width(), ui.height());
         popupP2.render(shape, batch, ui.width(), ui.height());
-        if (missionFailed) drawMissionFailedBanner();
+    }
+
+    // One line under the objective, or nothing
+    private String prompt() {
+        if (isDebug && popupP1.isOpen() && popupP2.isOpen()) {
+            return debugFocusedPlayerId == 1 ? DEBUG_FOCUS_P1 : DEBUG_FOCUS_P2;
+        }
+        return nearTerminal ? "Press E to interact" : null;
     }
 
     private String objective() {
         if (world.isExitGateOpen()) return "Exit gate open! Both of you step inside it.";
         if (reactorUnlocked) return "Reactor unlocked! Both of you stand on the pressure plates.";
         return "Find your terminal and solve it together with your partner to unlock the reactor.";
-    }
-
-    // Keep this text ASCII, the default font has no dash glyphs
-    private void drawMissionFailedBanner() {
-        float screenW = ui.width();
-        float screenH = ui.height();
-        float panelW = Math.min(980f, screenW * 0.6f);
-        float panelH = 420f;
-        float panelX = (screenW - panelW) / 2f;
-        float panelY = (screenH - panelH) / 2f;
-        float pad = 52f;
-        float notch = 22f;
-        Color accent = SplitScreen.ACCENT_P2;
-
-        Gdx.gl.glEnable(GL20.GL_BLEND);
-        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
-        shape.begin(ShapeRenderer.ShapeType.Filled);
-        shape.setColor(0f, 0f, 0f, 0.82f);
-        shape.rect(0, 0, screenW, screenH);
-        shape.setColor(COLOR_PANEL_BG);
-        shape.rect(panelX, panelY + notch, panelW, panelH - 2 * notch);
-        shape.rect(panelX + notch, panelY, panelW - 2 * notch, panelH);
-        shape.end();
-        Gdx.gl.glDisable(GL20.GL_BLEND);
-
-        shape.begin(ShapeRenderer.ShapeType.Line);
-        shape.setColor(COLOR_PANEL_BORDER);
-        shape.line(panelX, panelY + notch, panelX, panelY + panelH - notch);
-        shape.line(panelX, panelY + panelH - notch, panelX + notch, panelY + panelH);
-        shape.line(panelX + notch, panelY + panelH, panelX + panelW - notch, panelY + panelH);
-        shape.line(panelX + panelW - notch, panelY + panelH, panelX + panelW, panelY + panelH - notch);
-        shape.line(panelX + panelW, panelY + panelH - notch, panelX + panelW, panelY + notch);
-        shape.line(panelX + panelW, panelY + notch, panelX + panelW - notch, panelY);
-        shape.line(panelX + panelW - notch, panelY, panelX + notch, panelY);
-        shape.line(panelX + notch, panelY, panelX, panelY + notch);
-        shape.setColor(accent);
-        shape.line(panelX, panelY + panelH - notch, panelX + notch, panelY + panelH);
-        shape.line(panelX + panelW - notch, panelY, panelX + panelW, panelY + notch);
-        shape.end();
-
-        float textX = panelX + pad;
-        float contentW = panelW - 2 * pad;
-        float lineY = panelY + panelH - pad;
-        batch.begin();
-        font.getData().setScale(BANNER_TEXT_SCALE);
-        font.setColor(accent);
-        font.draw(batch, "// CRITICAL FAILURE", textX, lineY, contentW, Align.left, true);
-        lineY -= 54;
-        font.getData().setScale(BANNER_TITLE_SCALE);
-        font.draw(batch, "MISSION FAILED", textX, lineY, contentW, Align.left, false);
-        lineY -= 98;
-        font.getData().setScale(BANNER_TEXT_SCALE);
-        font.setColor(COLOR_TEXT);
-        lineY -= font.draw(batch, missionFailedReason, textX, lineY, contentW, Align.left, true).height + 33;
-        font.setColor(COLOR_DIM);
-        font.draw(batch, controller != null
-                ? "ESC = Main Menu\nENTER = Restart Level"
-                : "ESC = Main Menu\nWaiting for host to restart...",
-            textX, lineY, contentW, Align.left, true);
-        batch.end();
     }
 
     @Override
@@ -661,5 +594,6 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         player2.dispose();
         world.dispose();
         enemySprites.dispose();
+        hud.dispose();
     }
 }

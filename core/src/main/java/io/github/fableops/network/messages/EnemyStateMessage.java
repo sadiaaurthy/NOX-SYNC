@@ -1,11 +1,9 @@
-package io.github.fableops.level1.network;
-
-import io.github.fableops.network.messages.NetworkMessage;
+package io.github.fableops.network.messages;
 
 import java.util.ArrayList;
 import java.util.List;
 
-// Host -> client: enemy positions and both players' health
+// Host -> client: enemy positions and both players' health. Both levels use it
 public class EnemyStateMessage extends NetworkMessage {
     private final List<float[]> enemiesP1;
     private final List<float[]> enemiesP2;

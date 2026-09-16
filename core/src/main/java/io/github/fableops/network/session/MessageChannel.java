@@ -53,8 +53,10 @@ public abstract class MessageChannel {
         }
     }
 
+    // null parks incoming messages until the next listener is set
     public synchronized void setListener(MessageListener listener) {
         this.listener = listener;
+        if (listener == null) return;
         for (String[] message : pending) listener.onMessage(message[0], message[1]);
         pending.clear();
     }

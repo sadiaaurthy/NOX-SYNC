@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.layout.ColumnConstraints?>
+<?import javafx.scene.layout.GridPane?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.Region?>
+<?import javafx.scene.layout.StackPane?>
+<?import javafx.scene.layout.VBox?>
+
+<!-- ORV-style scenario scene. StoryController fills it in for each beat -->
+<StackPane fx:id="root" styleClass="story-stage" xmlns="http://javafx.com/javafx"
+           xmlns:fx="http://javafx.com/fxml"
+           fx:controller="io.github.fableops.launcher.StoryController">
+
+    <VBox styleClass="story-column" maxWidth="820" alignment="CENTER_LEFT" spacing="30">
+
+        <StackPane alignment="TOP_LEFT">
+            <Label fx:id="narrationSpace" styleClass="narration, narration-space" wrapText="true" maxWidth="Infinity" />
+            <Label fx:id="narration" styleClass="narration" wrapText="true" maxWidth="Infinity" />
+        </StackPane>
+
+        <VBox fx:id="scenarioWindow" styleClass="scenario-window">
+            <Label fx:id="heading" styleClass="scenario-heading" maxWidth="Infinity" />
+            <Region styleClass="scenario-divider" />
+            <GridPane fx:id="rows" hgap="14" vgap="9">
+                <columnConstraints>
+                    <ColumnConstraints minWidth="170" />
+                    <ColumnConstraints />
+                    <ColumnConstraints hgrow="ALWAYS" />
+                </columnConstraints>
+            </GridPane>
+        </VBox>
+
+        <HBox alignment="CENTER_RIGHT" spacing="28">
+            <Label fx:id="prompt" styleClass="story-prompt" />
+            <Label fx:id="ready" styleClass="story-ready" />
+        </HBox>
+    </VBox>
+</StackPane>

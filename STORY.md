@@ -139,9 +139,8 @@ Each banner below uses the same four-field panel already used for the mission-fa
 
 ## Delivery — where this text lives in the game
 
-No new rendering system is needed for any of the above.
-
-- **Banners** reuse the existing notched-panel draw call already used for the mission-failed screen (`Level1Screen`'s banner drawing), fired once per trigger instead of on a fail state.
+- **Scenario scenes** (game start, Level 1 → 2, Level 2 → 3, ending) are JavaFX scenes in the launcher: `story.fxml` and `story.css`, filled from `StoryBeat` in core. The narration types out above an ORV-style scenario window (Category, Difficulty, Clear Condition, Time Limit, Compensation, Failure). The game window hides while one is up and the next level loads behind it; the level starts once both players press Enter (`StoryGate`, `STORY_READY` message). The ending has no trigger until Level 3's boss exists: call `story.begin(StoryBeat.ENDING)` when it's defeated.
+- **In-level banners** (gate open, core picked up, core placed — not built yet) reuse the existing notched-panel draw call already used for the mission-failed screen (`Level1Screen`'s banner drawing), fired once per trigger instead of on a fail state.
 - **Lore terminals** (optional, additive) reuse `CodePopupUI` as-is — a list of display lines in a panel, opened with E, closed with ESC — for short found-log text in ops voice.
 - **Item descriptions** use the existing description field on `InventoryItem`, written in ops voice.
 - **HUD objective line** is the existing single line of live text in each screen; swap generic instruction text for one line that also names the location or stakes, still in ops voice.

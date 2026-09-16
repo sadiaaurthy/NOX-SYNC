@@ -56,18 +56,31 @@ public class SwarmController {
         separationDistance = bounds.bodyW * 0.8f;
     }
 
-    // One more enemy for each mistake, up to 6. If there's no free spot that enemy is skipped
+    // Level 1: one more enemy for each mistake, up to 6
     public void spawnWave(int offendingPlayerId, float aroundX, float aroundY, Collidable world) {
         int mistakeCount = (offendingPlayerId == 1) ? ++mistakesP1 : ++mistakesP2;
-        int spawnCount = Math.min(1 + mistakeCount, MAX_SPAWN_PER_WAVE);
+        spawnAround(offendingPlayerId, aroundX, aroundY, Math.min(1 + mistakeCount, MAX_SPAWN_PER_WAVE), world);
+    }
+
+    // Queues count enemies around a point for that side's swarm. If there's no free spot that enemy is skipped
+    public void spawnAround(int side, float aroundX, float aroundY, int count, Collidable world) {
         // Don't reset the timer of a wave that's already coming
         if (pendingSpawns.isEmpty()) spawnCountdown = INITIAL_SPAWN_DELAY_SECONDS;
 
-        for (int i = 0; i < spawnCount; i++) {
-            if (findSpawnPoint(aroundX, aroundY, offendingPlayerId, world)) {
-                pendingSpawns.offer(new PendingSpawn(offendingPlayerId, spawnProbe[0], spawnProbe[1]));
+        for (int i = 0; i < count; i++) {
+            if (findSpawnPoint(aroundX, aroundY, side, world)) {
+                pendingSpawns.offer(new PendingSpawn(side, spawnProbe[0], spawnProbe[1]));
             }
         }
+    }
+
+    // Enemies alive, dying or still waiting to come out on that side. Only called when a wave is due
+    public int count(int side) {
+        int total = ((side == 1) ? enemiesP1 : enemiesP2).size();
+        for (PendingSpawn pending : pendingSpawns) {
+            if (pending.side == side) total++;
+        }
+        return total;
     }
 
     // Tries rings around the player, closest first. The result goes into spawnProbe
@@ -143,31 +156,47 @@ public class SwarmController {
         }
     }
 
+    // side 0 hits the nearest enemy of either swarm, which is what Level 2's shared maze needs
     public void attackNearest(int side, float x, float y, float range, int damage) {
-        List<Enemy> list = (side == 1) ? enemiesP1 : enemiesP2;
         Enemy nearest = null;
         float nearestDistSq = range * range;
-        for (int i = 0; i < list.size(); i++) {
-            Enemy e = list.get(i);
-            if (!e.isActive()) continue;
-            float dx = e.centreX() - x;
-            float dy = e.centreY() - y;
-            float distSq = dx * dx + dy * dy;
-            if (distSq <= nearestDistSq) {
-                nearest = e;
-                nearestDistSq = distSq;
+        for (int s = 1; s <= 2; s++) {
+            if (side != 0 && side != s) continue;
+            List<Enemy> list = (s == 1) ? enemiesP1 : enemiesP2;
+            for (int i = 0; i < list.size(); i++) {
+                Enemy e = list.get(i);
+                if (!e.isActive()) continue;
+                float dx = e.centreX() - x;
+                float dy = e.centreY() - y;
+                float distSq = dx * dx + dy * dy;
+                if (distSq <= nearestDistSq) {
+                    nearest = e;
+                    nearestDistSq = distSq;
+                }
             }
         }
         if (nearest != null) nearest.takeDamage(damage);
     }
 
+    // side 0 checks both swarms
     public boolean isTouchingAny(int side, Player player) {
-        List<Enemy> list = (side == 1) ? enemiesP1 : enemiesP2;
+        return (side != 2 && touchesAny(enemiesP1, player)) || (side != 1 && touchesAny(enemiesP2, player));
+    }
+
+    private static boolean touchesAny(List<Enemy> list, Player player) {
         for (int i = 0; i < list.size(); i++) {
             Enemy e = list.get(i);
             if (e.isActive() && e.touches(player)) return true;
         }
         return false;
+    }
+
+    // For the enemy state message. Reuses the buffer, send() turns it into a string straight away
+    public List<float[]> positions(int side, List<float[]> buffer) {
+        List<Enemy> list = (side == 1) ? enemiesP1 : enemiesP2;
+        buffer.clear();
+        for (int i = 0; i < list.size(); i++) buffer.add(list.get(i).getPosition());
+        return buffer;
     }
 
     public List<Enemy> getEnemiesP1() { return enemiesP1; }

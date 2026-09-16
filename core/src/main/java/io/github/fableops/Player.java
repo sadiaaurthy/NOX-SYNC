@@ -14,7 +14,7 @@ import io.github.fableops.network.PlayerInput;
 // x, y is the bottom-left of the feet hitbox, the sprite is drawn around it
 public class Player {
 
-    // Same order as the rows in the sheet
+    // Same order as the rows in the sheets
     private enum Direction { DOWN, UP, LEFT, RIGHT }
 
     private static final Direction[] DIRECTIONS = Direction.values();
@@ -30,24 +30,20 @@ public class Player {
     // One swing plays all 8 attack frames and the next swing can't start before it ends.
     // 0.35 / 8 is about 44 ms per frame, longer than a frame at 30 FPS, so none get skipped
     private static final float ATTACK_DURATION = 0.35f;
+    // The fall plays once and then stays on its last frame
+    public static final float DEATH_DURATION = 0.96f;
     private static final float HURT_FLASH_DURATION = 0.18f;
     private static final float HURT_TINT_STRENGTH = 0.65f;   // how far green and blue drop at peak flash
-    private static final float DEAD_ROTATION_DEGREES = 85f;
-    private static final float DEAD_ALPHA = 0.65f;
 
     public float x, y;
     public float health = MAX_HEALTH;
     public final OrthographicCamera camera = new OrthographicCamera();
 
     private final Texture sheet;
-    private final Texture attackSheet;
     private final Animation<TextureRegion>[] walk; // indexed by Direction.ordinal()
-    private final Animation<TextureRegion>[] attack;
-    // Per attack row: world units per sheet pixel, and where each frame is drawn relative to x, y
-    private final float[] attackScale = new float[SHEET_ROWS];
-    private final float[] attackOffsetY = new float[SHEET_ROWS];
-    private final float[][] attackOffsetX = new float[SHEET_ROWS][SHEET_COLUMNS];
     private final SpriteBounds bounds;
+    private final OverlaySheet attack;
+    private final OverlaySheet death;
     private final int keyUp, keyDown, keyLeft, keyRight;
     // -1 means unset. It is checked explicitly because Input.Keys.ANY_KEY is also -1.
     private int keyRightAlt = -1;
@@ -60,12 +56,16 @@ public class Player {
     private Direction attackDirection = Direction.DOWN;
     private float attackTimer = 0f;
     private float hurtVisualTimer = 0f;
+    private float deathTimer = 0f;
+    // Per direction: 0 while its key is up, otherwise the order the keys went down in
+    private final int[] pressOrder = new int[DIRECTIONS.length];
+    private int pressCount = 0;
 
-    // Both sheets are 8x4 with rows down, up, left, right
-    // side = which wing this player can walk in Level 1
+    // sheetName.png walks, sheetNameAttacking.png swings and sheetNameDeath.png falls. All three are
+    // 8x4 with rows down, up, left, right. side = which wing this player can walk in Level 1
     @SuppressWarnings("unchecked")
-    public Player(String sheetFile, String attackSheetFile, float x, float y,
-                  int keyUp, int keyDown, int keyLeft, int keyRight, Collidable world, int side) {
+    public Player(String sheetName, float x, float y, int keyUp, int keyDown, int keyLeft, int keyRight,
+                  Collidable world, int side) {
         this.x = x;
         this.y = y;
         this.keyUp = keyUp;
@@ -75,7 +75,7 @@ public class Player {
         this.world = world;
         this.side = side;
 
-        Pixmap pixmap = new Pixmap(Gdx.files.internal(sheetFile));
+        Pixmap pixmap = new Pixmap(Gdx.files.internal(sheetName + ".png"));
         int[] columns = boundaries(pixmap, true, SHEET_COLUMNS);
         int[] rows = boundaries(pixmap, false, SHEET_ROWS);
         sheet = new Texture(pixmap);
@@ -96,11 +96,8 @@ public class Player {
         }
         bounds = new SpriteBounds(pixmap, allFrames, scales, SIZE);
 
-        Pixmap attackPixmap = new Pixmap(Gdx.files.internal(attackSheetFile));
-        attackSheet = new Texture(attackPixmap);
-        attack = new Animation[SHEET_ROWS];
-        loadAttack(pixmap, attackPixmap, attackSheetFile);
-        attackPixmap.dispose();
+        attack = new OverlaySheet(pixmap, sheetName + "Attacking.png", ATTACK_DURATION);
+        death = new OverlaySheet(pixmap, sheetName + "Death.png", DEATH_DURATION);
         pixmap.dispose();
     }
 
@@ -113,42 +110,65 @@ public class Player {
         return cuts != null ? cuts : SpriteSheetSlicer.uniform(length, frames);
     }
 
-    // The attack art isn't drawn at the same size or spot as the walk art, so each attack row is
+    // The attack and death art isn't drawn at the same size or spot as the walk art, so each row is
     // scaled until its first frame is as tall as the standing walk frame, with the feet and body centre lined up
-    private void loadAttack(Pixmap walkPixmap, Pixmap attackPixmap, String attackSheetFile) {
-        int[] rows = boundaries(attackPixmap, false, SHEET_ROWS);
-        int[] grid = SpriteSheetSlicer.uniform(attackPixmap.getWidth(), SHEET_COLUMNS);
-        for (int row = 0; row < SHEET_ROWS; row++) {
-            int rowHeight = rows[row + 1] - rows[row];
-            // The slashes cross the gaps between frames, so each row is cut on its own
-            int[] columns = SpriteSheetSlicer.columnsInRow(attackPixmap, rows[row], rows[row + 1], SHEET_COLUMNS);
-            TextureRegion[] frames = new TextureRegion[SHEET_COLUMNS];
-            for (int col = 0; col < SHEET_COLUMNS; col++) {
-                frames[col] = new TextureRegion(attackSheet, columns[col], rows[row],
-                    columns[col + 1] - columns[col], rowHeight);
-            }
-            attack[row] = new Animation<>(ATTACK_DURATION / SHEET_COLUMNS, frames);
+    private final class OverlaySheet {
 
-            TextureRegion stand = walk[row].getKeyFrames()[0];
-            int[] w = SpriteSheetSlicer.opaqueBounds(walkPixmap, stand); // {left, top, right, bottom}
-            int[] a = SpriteSheetSlicer.opaqueBounds(attackPixmap, frames[0]);
-            if (a[1] < 0) {
-                throw new IllegalStateException(attackSheetFile + " has an empty first frame in row " + row
-                    + ", so the attack can't be lined up with the walk sprite.");
-            }
-            float walkScale = SIZE / stand.getRegionHeight();
-            float scale = (w[3] - w[1] + 1) * walkScale / (a[3] - a[1] + 1);
-            float walkLeft = -bounds.footX + (SIZE - stand.getRegionWidth() * walkScale) / 2f;
-            float centreX = walkLeft + (w[0] + w[2] + 1) / 2f * walkScale;
-            float feetY = -bounds.footY + (stand.getRegionHeight() - 1 - w[3]) * walkScale;
+        private final Texture texture;
+        private final Animation<TextureRegion>[] rows;
+        // Per row: world units per sheet pixel, and where each frame is drawn relative to x, y
+        private final float[] scale = new float[SHEET_ROWS];
+        private final float[] offsetY = new float[SHEET_ROWS];
+        private final float[][] offsetX = new float[SHEET_ROWS][SHEET_COLUMNS];
 
-            attackScale[row] = scale;
-            attackOffsetY[row] = feetY - (rowHeight - 1 - a[3]) * scale;
-            float firstLeft = centreX - (a[0] + a[2] + 1) / 2f * scale;
-            for (int col = 0; col < SHEET_COLUMNS; col++) {
-                // Keeps each frame where it sits in its grid cell, so lunges and jumps still move
-                attackOffsetX[row][col] = firstLeft + (columns[col] - grid[col]) * scale;
+        @SuppressWarnings("unchecked")
+        OverlaySheet(Pixmap walkPixmap, String file, float duration) {
+            Pixmap pixmap = new Pixmap(Gdx.files.internal(file));
+            texture = new Texture(pixmap);
+            rows = new Animation[SHEET_ROWS];
+            int[] rowCuts = boundaries(pixmap, false, SHEET_ROWS);
+            int[] grid = SpriteSheetSlicer.uniform(pixmap.getWidth(), SHEET_COLUMNS);
+
+            for (int row = 0; row < SHEET_ROWS; row++) {
+                int rowHeight = rowCuts[row + 1] - rowCuts[row];
+                // Slashes and fallen bodies cross the gaps between frames, so each row is cut on its own
+                int[] columns = SpriteSheetSlicer.columnsInRow(pixmap, rowCuts[row], rowCuts[row + 1], SHEET_COLUMNS);
+                TextureRegion[] frames = new TextureRegion[SHEET_COLUMNS];
+                for (int col = 0; col < SHEET_COLUMNS; col++) {
+                    frames[col] = new TextureRegion(texture, columns[col], rowCuts[row],
+                        columns[col + 1] - columns[col], rowHeight);
+                }
+                rows[row] = new Animation<>(duration / SHEET_COLUMNS, frames);
+
+                TextureRegion stand = walk[row].getKeyFrames()[0];
+                int[] w = SpriteSheetSlicer.opaqueBounds(walkPixmap, stand); // {left, top, right, bottom}
+                int[] a = SpriteSheetSlicer.opaqueBounds(pixmap, frames[0]);
+                if (a[1] < 0) {
+                    throw new IllegalStateException(file + " has an empty first frame in row " + row
+                        + ", so it can't be lined up with the walk sprite.");
+                }
+                float walkScale = SIZE / stand.getRegionHeight();
+                scale[row] = (w[3] - w[1] + 1) * walkScale / (a[3] - a[1] + 1);
+                float walkLeft = -bounds.footX + (SIZE - stand.getRegionWidth() * walkScale) / 2f;
+                float centreX = walkLeft + (w[0] + w[2] + 1) / 2f * walkScale;
+                float feetY = -bounds.footY + (stand.getRegionHeight() - 1 - w[3]) * walkScale;
+
+                offsetY[row] = feetY - (rowHeight - 1 - a[3]) * scale[row];
+                float firstLeft = centreX - (a[0] + a[2] + 1) / 2f * scale[row];
+                for (int col = 0; col < SHEET_COLUMNS; col++) {
+                    // Keeps each frame where it sits in its grid cell, so lunges and falls still move
+                    offsetX[row][col] = firstLeft + (columns[col] - grid[col]) * scale[row];
+                }
             }
+            pixmap.dispose();
+        }
+
+        // Time past the end stays on the last frame
+        void draw(SpriteBatch batch, int row, float time) {
+            int col = rows[row].getKeyFrameIndex(time);
+            TextureRegion frame = rows[row].getKeyFrames()[col];
+            batch.draw(frame, x + offsetX[row][col], y + offsetY[row],
+                frame.getRegionWidth() * scale[row], frame.getRegionHeight() * scale[row]);
         }
     }
 
@@ -176,11 +196,13 @@ public class Player {
     public void updateVisualState(float delta) {
         attackTimer = Math.max(0f, attackTimer - delta);
         hurtVisualTimer = Math.max(0f, hurtVisualTimer - delta);
+        deathTimer = (health <= 0f) ? deathTimer + delta : 0f;
     }
 
     public void resetVisualState() {
         attackTimer = 0f;
         hurtVisualTimer = 0f;
+        deathTimer = 0f;
     }
 
     public void setAlternateRightKey(int key) {
@@ -188,37 +210,54 @@ public class Player {
     }
 
     public void update(float delta) {
-        float dx = 0, dy = 0;
-        if (Gdx.input.isKeyPressed(keyUp))    dy += SPEED * delta;
-        if (Gdx.input.isKeyPressed(keyDown))  dy -= SPEED * delta;
-        if (Gdx.input.isKeyPressed(keyLeft))  dx -= SPEED * delta;
-        if (Gdx.input.isKeyPressed(keyRight) || (keyRightAlt >= 0 && Gdx.input.isKeyPressed(keyRightAlt))) {
-            dx += SPEED * delta;
-        }
-        move(dx, dy, delta);
+        boolean right = Gdx.input.isKeyPressed(keyRight)
+            || (keyRightAlt >= 0 && Gdx.input.isKeyPressed(keyRightAlt));
+        steer(Gdx.input.isKeyPressed(keyUp), Gdx.input.isKeyPressed(keyDown),
+            Gdx.input.isKeyPressed(keyLeft), right, delta);
     }
 
     // Used by the host for the client's player
     public void applyInput(PlayerInput input, float delta) {
-        float dx = 0, dy = 0;
-        if (input.up)    dy += SPEED * delta;
-        if (input.down)  dy -= SPEED * delta;
-        if (input.left)  dx -= SPEED * delta;
-        if (input.right) dx += SPEED * delta;
+        steer(input.up, input.down, input.left, input.right, delta);
+    }
+
+    // No diagonals: of the keys held, the one pressed first wins, and two opposite keys stop the player.
+    // Keys that go down on the same frame prefer left/right, like the old diagonal facing did
+    private void steer(boolean up, boolean down, boolean left, boolean right, float delta) {
+        if (!up && !down && !left && !right) pressCount = 0;
+        holdKey(Direction.LEFT, left);
+        holdKey(Direction.RIGHT, right);
+        holdKey(Direction.UP, up);
+        holdKey(Direction.DOWN, down);
+
+        Direction chosen = null;
+        if (!(up && down) && !(left && right)) {
+            for (Direction direction : DIRECTIONS) {
+                int order = pressOrder[direction.ordinal()];
+                if (order > 0 && (chosen == null || order < pressOrder[chosen.ordinal()])) chosen = direction;
+            }
+        }
+        float step = SPEED * delta;
+        float dx = (chosen == Direction.LEFT) ? -step : (chosen == Direction.RIGHT) ? step : 0f;
+        float dy = (chosen == Direction.DOWN) ? -step : (chosen == Direction.UP) ? step : 0f;
         move(dx, dy, delta);
     }
 
+    private void holdKey(Direction direction, boolean held) {
+        int i = direction.ordinal();
+        if (!held) pressOrder[i] = 0;
+        else if (pressOrder[i] == 0) pressOrder[i] = ++pressCount;
+    }
+
     private void move(float dx, float dy, float delta) {
-        // Diagonal input faces the side sprite.
         if (dx < 0) facing = Direction.LEFT;
         else if (dx > 0) facing = Direction.RIGHT;
         else if (dy > 0) facing = Direction.UP;
         else if (dy < 0) facing = Direction.DOWN;
         stateTime = (dx != 0 || dy != 0) ? stateTime + delta : 0f;
 
-        // X and Y separately so you can slide along walls
-        if (!world.collides(x + dx, y, bounds.footW, bounds.footH, side)) x += dx;
-        if (!world.collides(x, y + dy, bounds.footW, bounds.footH, side)) y += dy;
+        if (dx != 0 && !world.collides(x + dx, y, bounds.footW, bounds.footH, side)) x += dx;
+        if (dy != 0 && !world.collides(x, y + dy, bounds.footW, bounds.footH, side)) y += dy;
         updateCamera();
     }
 
@@ -232,6 +271,17 @@ public class Player {
     // The direction the sprite is drawn facing, sent to the client with the attack timer
     public int getDirection() {
         return (attackTimer > 0f ? attackDirection : facing).ordinal();
+    }
+
+    // Where the player faces, as a unit vector. Shots go this way
+    public float facingX() {
+        Direction direction = DIRECTIONS[getDirection()];
+        return (direction == Direction.LEFT) ? -1f : (direction == Direction.RIGHT) ? 1f : 0f;
+    }
+
+    public float facingY() {
+        Direction direction = DIRECTIONS[getDirection()];
+        return (direction == Direction.DOWN) ? -1f : (direction == Direction.UP) ? 1f : 0f;
     }
 
     public float getAttackTimer() { return attackTimer; }
@@ -303,28 +353,22 @@ public class Player {
     }
 
     public void draw(SpriteBatch batch) {
-        boolean dead = health <= 0f;
-        float tint = 1f;
-        if (!dead && hurtVisualTimer > 0f) {
-            tint = 1f - HURT_TINT_STRENGTH * (hurtVisualTimer / HURT_FLASH_DURATION);
+        if (health <= 0f) {
+            death.draw(batch, facing.ordinal(), deathTimer);
+            return;
         }
-        batch.setColor(1f, tint, tint, dead ? DEAD_ALPHA : 1f);
+        float tint = (hurtVisualTimer > 0f)
+            ? 1f - HURT_TINT_STRENGTH * (hurtVisualTimer / HURT_FLASH_DURATION)
+            : 1f;
+        batch.setColor(1f, tint, tint, 1f);
 
-        if (!dead && attackTimer > 0f) {
-            int row = attackDirection.ordinal();
-            int col = attack[row].getKeyFrameIndex(ATTACK_DURATION - attackTimer);
-            TextureRegion frame = attack[row].getKeyFrames()[col];
-            float scale = attackScale[row];
-            batch.draw(frame, x + attackOffsetX[row][col], y + attackOffsetY[row],
-                frame.getRegionWidth() * scale, frame.getRegionHeight() * scale);
+        if (attackTimer > 0f) {
+            attack.draw(batch, attackDirection.ordinal(), ATTACK_DURATION - attackTimer);
         } else {
             TextureRegion frame = walk[facing.ordinal()].getKeyFrame(stateTime, true);
             // Same placement SpriteBounds measured, so the feet line up with the hitbox
             float drawW = frame.getRegionWidth() * (SIZE / frame.getRegionHeight());
-            float drawX = x - bounds.footX + (SIZE - drawW) / 2f;
-            // Rotate around the sprite centre
-            batch.draw(frame, drawX, y - bounds.footY, drawW / 2f, SIZE / 2f, drawW, SIZE,
-                1f, 1f, dead ? DEAD_ROTATION_DEGREES : 0f);
+            batch.draw(frame, x - bounds.footX + (SIZE - drawW) / 2f, y - bounds.footY, drawW, SIZE);
         }
         batch.setColor(1f, 1f, 1f, 1f);
     }
@@ -336,6 +380,7 @@ public class Player {
 
     public void dispose() {
         sheet.dispose();
-        attackSheet.dispose();
+        attack.texture.dispose();
+        death.texture.dispose();
     }
 }

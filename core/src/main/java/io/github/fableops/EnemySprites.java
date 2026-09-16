@@ -1,6 +1,7 @@
 package io.github.fableops;
 
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.Animation;
@@ -126,6 +127,28 @@ public class EnemySprites {
         float drawH = frame.getRegionHeight() * scale;
         batch.draw(frame, x - bounds.footX + (DRAW_SIZE - drawW) / 2f,
             y - bounds.footY + DRAW_SIZE - drawH, drawW, drawH);
+    }
+
+    // Skips the enemies outside this camera's view
+    public void drawAll(SpriteBatch batch, OrthographicCamera camera, List<Enemy> enemies) {
+        for (int i = 0; i < enemies.size(); i++) {
+            Enemy enemy = enemies.get(i);
+            if (isOnScreen(camera, enemy.x, enemy.y)) enemy.draw(batch, this);
+        }
+    }
+
+    // A client only knows positions, so it draws a standing frame
+    public void drawRemote(SpriteBatch batch, OrthographicCamera camera, List<float[]> positions) {
+        TextureRegion standing = walkFrame(0, 0f);
+        for (int i = 0; i < positions.size(); i++) {
+            float[] position = positions.get(i);
+            if (isOnScreen(camera, position[0], position[1])) draw(batch, standing, position[0], position[1]);
+        }
+    }
+
+    private static boolean isOnScreen(OrthographicCamera camera, float x, float y) {
+        return Math.abs(x - camera.position.x) <= camera.viewportWidth / 2f + DRAW_SIZE
+            && Math.abs(y - camera.position.y) <= camera.viewportHeight / 2f + DRAW_SIZE;
     }
 
     public void dispose() {

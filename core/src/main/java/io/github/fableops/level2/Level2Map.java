@@ -134,6 +134,8 @@ public class Level2Map implements Collidable {
 
     public void openExit() { exitOpen = true; }
 
+    public void closeExit() { exitOpen = false; }
+
     @Override
     public boolean collides(float x, float y, float w, float h, int playerSide) {
         return mask.blocksBox(x, y, w, h, exitOpen ? WALK_OPEN : WALK_SEALED);

@@ -1,68 +1,56 @@
 package io.github.fableops.level2.loot;
 
-import com.badlogic.gdx.graphics.Pixmap;
+import java.util.ArrayList;
+import java.util.List;
+
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
-
-import java.util.ArrayList;
-import java.util.List;
 
 import io.github.fableops.Player;
 import io.github.fableops.inventory.InventoryItem;
 import io.github.fableops.inventory.PlayerInventories;
 import io.github.fableops.level2.CoreObject;
+import io.github.fableops.level2.Gun;
 
-// Every loot drop placed in the maze (design doc: "Loot System"). Low/medium tiers go straight
-// into whichever player reaches them; high tier only unlocks while the core is being carried,
-// which is what creates the push-your-luck decision described in the doc.
-// Icons are flat-colour placeholder PNGs, one per tier, until real loot art exists
+// Every loot drop placed in the maze. Low and medium tiers can be picked up any time; the high tier
+// only unlocks while the core is being carried, which is the push-your-luck part of the level
 public class LootField {
 
     private static final float MARKER_SIZE = 60f;
 
-   /*  private static final Color LOW_COLOR = new Color(0.65f, 0.68f, 0.72f, 1f);
-    private static final Color MEDIUM_COLOR = new Color(0.25f, 0.55f, 0.95f, 1f);
-    private static final Color HIGH_COLOR = new Color(0.95f, 0.75f, 0.15f, 1f); */
-
-    private final Texture weaponIcon = new Texture(Gdx.files.internal("LootWeapon.png"));
+    private final Texture gunIcon = new Texture(Gdx.files.internal("LootWeapon.png"));
     private final Texture ammoCacheIcon = new Texture(Gdx.files.internal("LootAmmoCache.png"));
     private final Texture medKitIcon = new Texture(Gdx.files.internal("LootMedkit.png"));
     private final Texture shieldCellIcon = new Texture(Gdx.files.internal("LootShieldCell.png"));
     private final Texture premiumShieldIcon = new Texture(Gdx.files.internal("LootPremiumShield.png"));
 
-
     private final List<LootDrop> drops = new ArrayList<>();
+    private final LootDrop gunDrop;
     private float glowTime = 0f;
 
+    // Both machines build the same list, the ids are what travels over the network
     public LootField() {
         int id = 0;
-        // Low/medium: scattered through the outer rooms, safe to grab whenever
-      /*   drops.add(drop(id++, LootTier.LOW, 200f, 844f, "Ammo Cache",
-            "Restocks the basics. Doesn't need the core.", lowIcon, 0f));
-        drops.add(drop(id++, LootTier.MEDIUM, 350f, 564f, "Medkit",
-            "Patches you up. Doesn't need the core.", mediumIcon, 35f));
-        drops.add(drop(id++, LootTier.MEDIUM, 700f, 724f, "Weapon",
-    "A basic weapon upgrade.", weaponIcon, 0f));
-        drops.add(drop(id++, LootTier.MEDIUM, 950f, 564f, "Shield Cell",
-            "A temporary shield charge.", mediumIcon, 0f));
-        // High value: deeper toward the reactor, locked out until the core leaves its pedestal
-        drops.add(drop(id++, LootTier.HIGH, 1000f, 324f, "Rare Plating",
-            "Rare armour. Only appears while the core is carried.", highIcon, 0f)); */
-
-    drops.add(drop(id++, LootTier.MEDIUM, 700f, 724f, "Weapon","A basic weapon upgrade.", weaponIcon, 0f));
-    drops.add(drop(id++, LootTier.LOW, 200f, 830f, "Ammo Cache","A ammo cache.", ammoCacheIcon, 0f));
-    drops.add(drop(id++, LootTier.MEDIUM, 350f, 564f, "Med kit", "Patches you up. Doesn't need the core.", medKitIcon, 35f));
-    drops.add(drop(id++, LootTier.MEDIUM, 950f, 564f, "Shield Cell","A temporary shield charge.", shieldCellIcon, 0f));
-    drops.add(drop(id++, LootTier.HIGH, 1100f, 400f, "Rare Plating", "Rare armour. Only appears while the core is carried.", premiumShieldIcon, 0f));
+        // Not shareable, so the gun stays with whoever picked it up and both machines agree who shoots
+        gunDrop = new LootDrop(id++, LootTier.MEDIUM, 700f, 724f, new InventoryItem("Sidearm",
+            "Fires where you face. Hold attack to shoot, R reloads.", gunIcon, 0f, false), 0);
+        drops.add(gunDrop);
+        drops.add(new LootDrop(id++, LootTier.LOW, 200f, 830f, new InventoryItem("Ammo Cache",
+            "Rounds for the sidearm.", ammoCacheIcon, 0f, false), Gun.CACHE_ROUNDS));
+        drops.add(item(id++, LootTier.MEDIUM, 350f, 564f, "Med kit",
+            "Patches you up. Doesn't need the core.", medKitIcon, 35f));
+        drops.add(item(id++, LootTier.MEDIUM, 950f, 564f, "Shield Cell",
+            "A temporary shield charge.", shieldCellIcon, 0f));
+        drops.add(item(id++, LootTier.HIGH, 1100f, 400f, "Rare Plating",
+            "Rare armour. Only appears while the core is carried.", premiumShieldIcon, 0f));
     }
 
-    private static LootDrop drop(int id, LootTier tier, float x, float y, String name, String description,
+    // Low and medium loot can be handed over through the shared slot, high-value gear stays personal
+    private static LootDrop item(int id, LootTier tier, float x, float y, String name, String description,
                                  Texture icon, float healAmount) {
-        // High-value gear is personal; low/medium loot can be handed off through the shared slot
-        boolean shareable = tier != LootTier.HIGH;
-        InventoryItem item = new InventoryItem(name, description, icon, healAmount, shareable);
-        return new LootDrop(id, tier, x, y, item);
+        InventoryItem inventoryItem = new InventoryItem(name, description, icon, healAmount, tier != LootTier.HIGH);
+        return new LootDrop(id, tier, x, y, inventoryItem, 0);
     }
 
     public void update(float delta) {
@@ -82,33 +70,41 @@ public class LootField {
         return null;
     }
 
-    // What E does here right now, or null. A reachable but still-locked high-value drop
+    // What G does here right now, or null. A reachable but still-locked high-value drop
     // gets its own message instead of staying silent
     public String prompt(Player player, CoreObject.State coreState) {
         for (int i = 0; i < drops.size(); i++) {
             LootDrop drop = drops.get(i);
             if (!drop.canReach(player)) continue;
-            if (!unlocked(drop, coreState)) return "High-value cache - carry the Core to unlock";
-                        return "Press G to take " + drop.getItem().getName();
+            return unlocked(drop, coreState) ? drop.getPrompt() : "High-value cache - carry the Core to unlock";
         }
         return null;
     }
 
-    // Called on both the host (right after it accepts the pickup) and the client (on the network
-    // message it gets back), so the item lands in the same player's inventory on both machines
-    public void applyPickup(int lootId, int playerId, PlayerInventories inventories) {
+    // Called on the host (right after it accepts the pickup) and on the client (on the message it gets
+    // back), so the same thing lands in the same place on both machines
+    public LootDrop applyPickup(int lootId, int playerId, PlayerInventories inventories) {
         for (int i = 0; i < drops.size(); i++) {
             LootDrop drop = drops.get(i);
-            if (drop.getId() == lootId && !drop.isCollected()) {
-                drop.setCollected(true);
-                inventories.forPlayer(playerId).add(drop.getItem());
-                return;
-            }
+            if (drop.getId() != lootId || drop.isCollected()) continue;
+            drop.setCollected(true);
+            // Ammo goes into the gun, not the inventory
+            if (drop.getAmmo() == 0) inventories.forPlayer(playerId).add(drop.getItem());
+            return drop;
         }
+        return null;
     }
 
-    // Call inside a filled ShapeRenderer pass with blending on
-        // Call inside its own SpriteBatch begin/end pass
+    public boolean isGun(LootDrop drop) {
+        return drop == gunDrop;
+    }
+
+    // Everything goes back into the maze when the level restarts
+    public void reset() {
+        for (int i = 0; i < drops.size(); i++) drops.get(i).setCollected(false);
+    }
+
+    // Call inside a SpriteBatch pass
     public void render(SpriteBatch batch, CoreObject.State coreState) {
         float pulse = 0.5f + 0.5f * (float) Math.sin(glowTime * 3f);
         for (int i = 0; i < drops.size(); i++) {
@@ -124,7 +120,7 @@ public class LootField {
     }
 
     public void dispose() {
-        weaponIcon.dispose();
+        gunIcon.dispose();
         ammoCacheIcon.dispose();
         medKitIcon.dispose();
         shieldCellIcon.dispose();

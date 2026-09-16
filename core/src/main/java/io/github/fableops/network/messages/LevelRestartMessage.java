@@ -1,7 +1,6 @@
-package io.github.fableops.level1.network;
+package io.github.fableops.network.messages;
 
-import io.github.fableops.network.messages.NetworkMessage;
-
+// Host -> client: the current level starts over. Both levels use it
 public class LevelRestartMessage extends NetworkMessage {
     @Override
     public String getType() { return "LEVEL_RESTART"; }

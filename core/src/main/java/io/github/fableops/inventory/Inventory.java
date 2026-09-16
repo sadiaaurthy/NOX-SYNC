@@ -40,6 +40,11 @@ public class Inventory {
         }
     }
 
+    public void clear() {
+        for (int i = 0; i < CAPACITY; i++) slots[i] = null;
+        selectedIndex = 0;
+    }
+
     public int count() {
         int n = 0;
         for (InventoryItem item : slots) {

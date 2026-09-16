@@ -18,16 +18,18 @@ public class Level2Controller {
     private final HostSession hostSession;
     private final CoreObject core;
     private final LootField loot;
+    private final Gun gun;
     private final PlayerInventories inventories;
     private final Level2Map world;
     private final Player player1;
     private final Player player2;
 
-    public Level2Controller(HostSession hostSession, CoreObject core, LootField loot, PlayerInventories inventories,
-                            Level2Map world, Player player1, Player player2) {
+    public Level2Controller(HostSession hostSession, CoreObject core, LootField loot, Gun gun,
+                            PlayerInventories inventories, Level2Map world, Player player1, Player player2) {
         this.hostSession = hostSession;
         this.core = core;
         this.loot = loot;
+        this.gun = gun;
         this.inventories = inventories;
         this.world = world;
         this.player1 = player1;
@@ -65,6 +67,9 @@ public class Level2Controller {
         if (drop == null || drop.getId() != lootId) return;
 
         loot.applyPickup(drop.getId(), playerId, inventories);
+        // The gun belongs to whoever picks it up, and a cache loads it whoever grabs that
+        if (loot.isGun(drop)) gun.giveTo(playerId);
+        gun.addSpare(drop.getAmmo());
         if (hostSession != null) hostSession.send(new LootPickedUpMessage(drop.getId(), playerId));
     }
 }

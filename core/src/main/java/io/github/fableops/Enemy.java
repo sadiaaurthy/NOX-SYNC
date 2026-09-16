@@ -62,6 +62,11 @@ public class Enemy {
 
     public float centreY() { return y - bounds.footY + bounds.bodyY + bounds.bodyH / 2f; }
 
+    // Middle of the feet box, which is what walls are measured against
+    public float footCentreX() { return x + bounds.footW / 2f; }
+
+    public float footCentreY() { return y + bounds.footH / 2f; }
+
     public boolean touches(Player player) {
         return player.bodyOverlaps(x - bounds.footX + bounds.bodyX, y - bounds.footY + bounds.bodyY,
             bounds.bodyW, bounds.bodyH);

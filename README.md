@@ -49,17 +49,23 @@ The desktop game window (LWJGL3 backend). The game's assets are packaged from `a
 
 ## Running the Project
 
-In VS Code press `Ctrl+Shift+B`, or run:
+In VS Code press `Ctrl+Shift+B`. It builds with Gradle and then starts the installed game, so Gradle isn't kept busy while you play.
+
+From a terminal:
 
 ```bash
-./gradlew launcher:run
+./gradlew launcher:installDist
+./launcher/build/install/launcher/bin/launcher
 ```
 
 Windows:
 
 ```bash
-gradlew.bat launcher:run
+gradlew.bat launcher:installDist
+launcher\build\install\launcher\bin\launcher.bat
 ```
+
+To test LAN on one PC, run only the second line again for the second copy; it starts without Gradle. `gradlew launcher:run` still works, but it keeps Gradle busy until the game closes, so a second copy has to wait for a new Gradle daemon.
 
 ---
 

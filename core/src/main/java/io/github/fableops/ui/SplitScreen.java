@@ -6,7 +6,6 @@ import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
-import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 
 import io.github.fableops.Player;
 
@@ -24,12 +23,7 @@ public final class SplitScreen {
     public static final Color ACCENT_P2 = new Color(1f, 0.16f, 0.43f, 1f);
 
     // HUD metrics, in UiViewport's virtual units.
-    public static final float HUD_FONT_SCALE = 1.4f;
     public static final float HUD_MARGIN = 26f;
-    public static final float HUD_LINE_STEP = 34f;
-    private static final float BAR_W = 220f;
-    private static final float BAR_H = 22f;
-    private static final float BAR_GAP = 20f;
 
     public interface HalfRenderer {
         void drawHalf(OrthographicCamera camera);
@@ -68,25 +62,6 @@ public final class SplitScreen {
     public static void smoothFont(BitmapFont font) {
         font.getRegion().getTexture().setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
         font.setUseIntegerPositions(false);
-    }
-
-    // Both bars in each half, in one ShapeRenderer pass
-    public static void drawHealthBars(ShapeRenderer shape, float uiWidth, float barY, Player p1, Player p2) {
-        float half = uiWidth / 2f;
-        float step = BAR_W + BAR_GAP;
-        shape.begin(ShapeRenderer.ShapeType.Filled);
-        drawBar(shape, HUD_MARGIN, barY, p1.health, Color.CYAN);
-        drawBar(shape, HUD_MARGIN + step, barY, p2.health, Color.MAGENTA);
-        drawBar(shape, half + HUD_MARGIN, barY, p1.health, Color.CYAN);
-        drawBar(shape, half + HUD_MARGIN + step, barY, p2.health, Color.MAGENTA);
-        shape.end();
-    }
-
-    private static void drawBar(ShapeRenderer shape, float x, float y, float health, Color color) {
-        shape.setColor(Color.DARK_GRAY);
-        shape.rect(x, y, BAR_W, BAR_H);
-        shape.setColor(color);
-        shape.rect(x, y, BAR_W * (health / Player.MAX_HEALTH), BAR_H);
     }
 
     private SplitScreen() {}

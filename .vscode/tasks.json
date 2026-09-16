@@ -2,7 +2,7 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Run FableOps",
+            "label": "Build FableOps",
             "type": "shell",
 
             "command": "./gradlew",
@@ -12,8 +12,33 @@
             },
 
             "args": [
-                ":launcher:run"
+                ":launcher:installDist"
             ],
+
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+
+            "presentation": {
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+
+            "problemMatcher": []
+        },
+        {
+            "label": "Run FableOps",
+            "type": "shell",
+
+            "command": "./launcher/build/install/launcher/bin/launcher",
+
+            "windows": {
+                "command": ".\\launcher\\build\\install\\launcher\\bin\\launcher.bat"
+            },
+
+            "dependsOn": "Build FableOps",
 
             "options": {
                 "cwd": "${workspaceFolder}"

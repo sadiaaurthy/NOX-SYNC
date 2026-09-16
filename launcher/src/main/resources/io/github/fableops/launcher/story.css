@@ -1,0 +1,90 @@
+/* ORV-style scenario window, same palette as launcher.css */
+
+.story-stage {
+    -fx-background-color: radial-gradient(center 50% 48%, radius 70%, #1a0f07 0%, #050506 100%);
+}
+
+.story-column {
+    -fx-padding: 40;
+}
+
+.narration {
+    -fx-font-family: "Segoe UI";
+    -fx-font-size: 21px;
+    -fx-text-fill: #EDEDE8;
+    -fx-line-spacing: 6px;
+}
+.narration-space {
+    -fx-opacity: 0;
+}
+
+.scenario-window {
+    -fx-background-color: rgba(20, 11, 5, 0.94);
+    -fx-border-color: #FF8A3D;
+    -fx-border-width: 2;
+    -fx-padding: 18 28 24 28;
+    -fx-spacing: 14;
+    -fx-effect: dropshadow(gaussian, rgba(255, 138, 61, 0.45), 28, 0.12, 0, 0);
+}
+
+.scenario-heading {
+    -fx-font-family: "Consolas";
+    -fx-font-size: 22px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #FF8A3D;
+    -fx-alignment: center;
+}
+
+.scenario-divider {
+    -fx-background-color: #6B3A16;
+    -fx-min-height: 2;
+    -fx-pref-height: 2;
+    -fx-max-height: 2;
+}
+
+.row-label {
+    -fx-font-family: "Consolas";
+    -fx-font-size: 17px;
+    -fx-text-fill: #FFB27A;
+}
+.row-value {
+    -fx-font-family: "Consolas";
+    -fx-font-size: 17px;
+    -fx-text-fill: #EDEDE8;
+}
+
+.story-prompt {
+    -fx-font-family: "Consolas";
+    -fx-font-size: 15px;
+    -fx-text-fill: #FF8A3D;
+}
+.story-ready {
+    -fx-font-family: "Consolas";
+    -fx-font-size: 15px;
+    -fx-text-fill: #8C8C86;
+}
+
+/* Mission failed: the same window in player 2's magenta */
+
+.story-stage.failed {
+    -fx-background-color: radial-gradient(center 50% 48%, radius 70%, #22070f 0%, #050506 100%);
+}
+
+.failed .scenario-window {
+    -fx-background-color: rgba(24, 5, 11, 0.94);
+    -fx-border-color: #FF2A6D;
+    -fx-effect: dropshadow(gaussian, rgba(255, 42, 109, 0.5), 30, 0.14, 0, 0);
+}
+
+.failed .scenario-heading,
+.failed .story-prompt {
+    -fx-text-fill: #FF2A6D;
+}
+
+.failed .scenario-divider {
+    -fx-background-color: #661229;
+}
+
+.failed .row-label {
+    -fx-text-fill: #FF8FB0;
+}

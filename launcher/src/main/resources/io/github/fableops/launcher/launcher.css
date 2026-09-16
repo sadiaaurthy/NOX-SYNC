@@ -32,12 +32,10 @@
 }
 .chrome-text {
     -fx-font-size: 10px;
-    -fx-letter-spacing: 1.4px;
     -fx-text-fill: -fo-text-2;
 }
 .chrome-accent {
     -fx-font-size: 10px;
-    -fx-letter-spacing: 1.4px;
     -fx-text-fill: -fo-orange;
 }
 
@@ -48,7 +46,6 @@
 
 .eyebrow {
     -fx-font-size: 10px;
-    -fx-letter-spacing: 5px;
     -fx-text-fill: -fo-magenta;
     -fx-padding: 0 0 16 0;
 }
@@ -70,7 +67,6 @@
 .title-underline {
     -fx-background-color: -fo-orange;
     -fx-rotate: -8;
-    -fx-margin: 14 0 0 0;
 }
 
 .pixel-panel {
@@ -80,12 +76,10 @@
     -fx-padding: 20;
     -fx-background-radius: 0;
     -fx-border-radius: 0;
-    -fx-margin: 30 0 0 0;
 }
 
 .panel-label {
     -fx-font-size: 10px;
-    -fx-letter-spacing: 2px;
     -fx-text-fill: -fo-text-1;
 }
 .panel-marks {
@@ -164,34 +158,55 @@
 
 /* ---- controls reference panel, beside the operations panel ---- */
 
-.controls-panel {
-    -fx-padding: 16 20 18 20;
+/* Corner legend --------------------------------------------------------- */
+
+/* No border and no panel fill: reference material should sit under the menu in
+   the hierarchy, not frame itself like a second primary action. */
+.legend {
+    -fx-padding: 0 26 22 0;
+    -fx-spacing: 1;
 }
 
-.controls-col {
-    -fx-min-width: 226;
+.legend-title-row {
+    -fx-padding: 0 0 7 0;
 }
 
-/* Section heading. Top padding separates it from the rows above without
-   needing a spacer node between every group. */
-.controls-head {
-    -fx-font-family: "Consolas", "Courier New", monospace;
-    -fx-font-size: 11px;
-    -fx-text-fill: -fo-orange;
-    -fx-padding: 8 0 2 0;
-}
-
-/* Fixed width so every description starts on the same vertical line — that
-   alignment is what makes a list this long scannable. */
-.controls-key {
-    -fx-font-family: "Consolas", "Courier New", monospace;
-    -fx-font-size: 11px;
-    -fx-text-fill: -fo-cyan;
-    -fx-min-width: 78;
-}
-
-.controls-desc {
-    -fx-font-family: "Segoe UI", sans-serif;
-    -fx-font-size: 11px;
+.legend-title {
+    -fx-font-size: 12px;
     -fx-text-fill: -fo-text-1;
+}
+
+.legend-marks {
+    -fx-font-size: 12px;
+    -fx-text-fill: -fo-orange-dim;
+}
+
+.legend-row {
+    -fx-alignment: CENTER_LEFT;
+    -fx-padding: 2 0 2 0;
+}
+
+/* Fixed width so every group label starts its row on the same line. */
+.legend-head {
+    -fx-font-size: 12px;
+    -fx-text-fill: -fo-orange;
+    -fx-min-width: 62;
+}
+
+/* Keys read as keys: boxed, cyan, monospace. */
+.legend-keys {
+    -fx-font-family: "Consolas", "Courier New", monospace;
+    -fx-font-size: 12px;
+    -fx-text-fill: -fo-cyan;
+    -fx-border-color: -fo-line;
+    -fx-border-width: 1;
+    -fx-padding: 1 6 1 6;
+}
+
+/* 12px and -fo-text-1 clear 4.5:1 on the near black background. */
+.legend-desc {
+    -fx-font-family: "Segoe UI", sans-serif;
+    -fx-font-size: 12px;
+    -fx-text-fill: -fo-text-1;
+    -fx-padding: 0 6 0 0;
 }

@@ -26,9 +26,9 @@
         </HBox>
     </VBox>
 
-    <StackPane StackPane.alignment="CENTER">
-      <HBox alignment="CENTER" spacing="30">
-        <VBox styleClass="panel-column" maxWidth="430" alignment="CENTER_LEFT">
+    <!-- maxHeight keeps this at its preferred height so the StackPane centres it,
+         rather than stretching it and shifting the column padding. -->
+    <VBox styleClass="panel-column" maxWidth="430" maxHeight="-Infinity" alignment="CENTER_LEFT">
 
             <Label styleClass="eyebrow" text="&#9632; ACCESS TERMINAL 03" />
 
@@ -99,53 +99,81 @@
                 <Label styleClass="status-text" text="build 2026.08.01" />
             </HBox>
 
-        </VBox>
+    </VBox>
 
-        <!-- Every in-game binding. -->
-        <VBox styleClass="pixel-panel, controls-panel" spacing="8" maxWidth="520">
-            <Label styleClass="panel-label" text="CONTROLS" />
+    <!-- Corner legend. Grouped one line per context so it stays scannable at a glance
+         instead of turning into a thirty row wall. -->
+    <VBox styleClass="legend" StackPane.alignment="BOTTOM_RIGHT" maxWidth="-Infinity" maxHeight="-Infinity">
 
-            <HBox spacing="26">
-                <VBox styleClass="controls-col" spacing="3">
-                    <Label styleClass="controls-head" text="MOVE" />
-                    <HBox spacing="10"><Label styleClass="controls-key" text="W A S D" /><Label styleClass="controls-desc" text="Player 1" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="ARROWS" /><Label styleClass="controls-desc" text="Player 2" /></HBox>
+        <HBox styleClass="legend-title-row" alignment="CENTER_LEFT" spacing="8">
+            <Label styleClass="legend-title" text="CONTROLS" />
+            <Label styleClass="legend-marks" text="&#9632;&#9632;&#9633;" />
+        </HBox>
 
-                    <Label styleClass="controls-head" text="FIGHT" />
-                    <HBox spacing="10"><Label styleClass="controls-key" text="F" /><Label styleClass="controls-desc" text="Player 1 attack" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="R-SHIFT" /><Label styleClass="controls-desc" text="Player 2 attack" /></HBox>
+        <HBox styleClass="legend-row" spacing="10">
+            <Label styleClass="legend-head" text="MOVE" />
+            <Label styleClass="legend-keys" text="W A S D" />
+            <Label styleClass="legend-desc" text="player 1" />
+            <Label styleClass="legend-keys" text="ARROWS" />
+            <Label styleClass="legend-desc" text="player 2" />
+        </HBox>
 
-                    <Label styleClass="controls-head" text="WORLD" />
-                    <HBox spacing="10"><Label styleClass="controls-key" text="E" /><Label styleClass="controls-desc" text="Terminal / core" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="1" /><Label styleClass="controls-desc" text="Player 1 inventory" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="2" /><Label styleClass="controls-desc" text="Player 2 inventory" /></HBox>
+        <HBox styleClass="legend-row" spacing="10">
+            <Label styleClass="legend-head" text="FIGHT" />
+            <Label styleClass="legend-keys" text="LMB" />
+            <Label styleClass="legend-desc" text="p1 attack" />
+            <Label styleClass="legend-keys" text="RMB" />
+            <Label styleClass="legend-desc" text="p2 attack" />
+        </HBox>
 
-                    <Label styleClass="controls-head" text="SYSTEM" />
-                    <HBox spacing="10"><Label styleClass="controls-key" text="F1" /><Label styleClass="controls-desc" text="Collision overlay" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="F2" /><Label styleClass="controls-desc" text="UI size / projector" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="K" /><Label styleClass="controls-desc" text="Skip stage (debug)" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="ESC" /><Label styleClass="controls-desc" text="Back / quit" /></HBox>
-                </VBox>
+        <HBox styleClass="legend-row" spacing="10">
+            <Label styleClass="legend-head" text="RELOAD" />
+            <Label styleClass="legend-keys" text="R" />
+            <Label styleClass="legend-desc" text="player 1" />
+            <Label styleClass="legend-keys" text="R-CTRL" />
+            <Label styleClass="legend-desc" text="player 2" />
+        </HBox>
 
-                <VBox styleClass="controls-col" spacing="3">
-                    <Label styleClass="controls-head" text="TERMINAL" />
-                    <HBox spacing="10"><Label styleClass="controls-key" text="TAB" /><Label styleClass="controls-desc" text="Next position" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="0 - 9" /><Label styleClass="controls-desc" text="Enter digit" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="BKSP" /><Label styleClass="controls-desc" text="Delete digit" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="ENTER" /><Label styleClass="controls-desc" text="Submit" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="SPACE" /><Label styleClass="controls-desc" text="Switch terminal" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="ESC" /><Label styleClass="controls-desc" text="Close" /></HBox>
+        <HBox styleClass="legend-row" spacing="10">
+            <Label styleClass="legend-head" text="WORLD" />
+            <Label styleClass="legend-keys" text="E" />
+            <Label styleClass="legend-desc" text="terminal / core" />
+            <Label styleClass="legend-keys" text="G" />
+            <Label styleClass="legend-desc" text="take loot" />
+        </HBox>
 
-                    <Label styleClass="controls-head" text="INVENTORY" />
-                    <HBox spacing="10"><Label styleClass="controls-key" text="WASD / ARR" /><Label styleClass="controls-desc" text="Move cursor" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="TAB" /><Label styleClass="controls-desc" text="Shared slot" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="R" /><Label styleClass="controls-desc" text="Put / take" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="ENTER" /><Label styleClass="controls-desc" text="Use item" /></HBox>
-                    <HBox spacing="10"><Label styleClass="controls-key" text="ESC" /><Label styleClass="controls-desc" text="Close" /></HBox>
-                </VBox>
-            </HBox>
-        </VBox>
-      </HBox>
-    </StackPane>
+        <HBox styleClass="legend-row" spacing="10">
+            <Label styleClass="legend-head" text="BAG" />
+            <Label styleClass="legend-keys" text="1 / 2" />
+            <Label styleClass="legend-desc" text="open" />
+            <Label styleClass="legend-keys" text="TAB" />
+            <Label styleClass="legend-desc" text="share" />
+            <Label styleClass="legend-keys" text="R" />
+            <Label styleClass="legend-desc" text="move" />
+            <Label styleClass="legend-keys" text="ENTER" />
+            <Label styleClass="legend-desc" text="use" />
+        </HBox>
+
+        <HBox styleClass="legend-row" spacing="10">
+            <Label styleClass="legend-head" text="CODE" />
+            <Label styleClass="legend-keys" text="TAB" />
+            <Label styleClass="legend-desc" text="field" />
+            <Label styleClass="legend-keys" text="0-9" />
+            <Label styleClass="legend-desc" text="type" />
+            <Label styleClass="legend-keys" text="ENTER" />
+            <Label styleClass="legend-desc" text="submit" />
+        </HBox>
+
+        <HBox styleClass="legend-row" spacing="10">
+            <Label styleClass="legend-head" text="SYSTEM" />
+            <Label styleClass="legend-keys" text="F1" />
+            <Label styleClass="legend-desc" text="collision" />
+            <Label styleClass="legend-keys" text="F2" />
+            <Label styleClass="legend-desc" text="ui scale" />
+            <Label styleClass="legend-keys" text="ESC" />
+            <Label styleClass="legend-desc" text="back" />
+        </HBox>
+
+    </VBox>
 
 </StackPane>

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.image.ImageView?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.Region?>
+<?import javafx.scene.layout.StackPane?>
+<?import javafx.scene.layout.VBox?>
+
+<!-- Operator select. RoleController fills both cards from the Role enum, so the names and the
+     blurbs live in one place next to the sprite sheets they pick -->
+<StackPane fx:id="root" styleClass="role-stage" xmlns="http://javafx.com/javafx"
+           xmlns:fx="http://javafx.com/fxml"
+           fx:controller="io.github.fableops.launcher.RoleController">
+
+    <VBox alignment="CENTER" spacing="14" maxWidth="-Infinity" maxHeight="-Infinity">
+
+        <Label styleClass="role-eyebrow" text="&#9632; OPERATOR ASSIGNMENT" />
+        <Label fx:id="title" styleClass="role-title" text="SELECT YOUR OPERATOR" />
+        <Region styleClass="role-underline" maxWidth="76" minHeight="4" />
+
+        <HBox spacing="16" alignment="CENTER">
+
+            <VBox fx:id="cardOne" styleClass="role-card" alignment="TOP_LEFT">
+                <StackPane styleClass="portrait-frame">
+                    <ImageView fx:id="portraitOne" fitWidth="252" preserveRatio="true" smooth="true" />
+                    <Label fx:id="stateOne" styleClass="role-state" StackPane.alignment="TOP_RIGHT" />
+                </StackPane>
+                <Label fx:id="nameOne" styleClass="role-name" />
+                <Label fx:id="archOne" styleClass="role-archetype" />
+                <Label fx:id="blurbOne" styleClass="role-blurb" wrapText="true" maxWidth="252" />
+            </VBox>
+
+            <VBox fx:id="cardTwo" styleClass="role-card" alignment="TOP_LEFT">
+                <StackPane styleClass="portrait-frame">
+                    <ImageView fx:id="portraitTwo" fitWidth="252" preserveRatio="true" smooth="true" />
+                    <Label fx:id="stateTwo" styleClass="role-state" StackPane.alignment="TOP_RIGHT" />
+                </StackPane>
+                <Label fx:id="nameTwo" styleClass="role-name" />
+                <Label fx:id="archTwo" styleClass="role-archetype" />
+                <Label fx:id="blurbTwo" styleClass="role-blurb" wrapText="true" maxWidth="252" />
+            </VBox>
+
+        </HBox>
+
+        <HBox alignment="CENTER" spacing="20">
+            <Label styleClass="role-key" text="&#8592; &#8594;" />
+            <Label styleClass="role-hint" text="choose" />
+            <Label styleClass="role-key" text="ENTER" />
+            <Label styleClass="role-hint" text="lock in" />
+            <Label styleClass="role-key" text="ESC" />
+            <Label styleClass="role-hint" text="back" />
+        </HBox>
+
+        <Label fx:id="status" styleClass="role-status" />
+
+    </VBox>
+</StackPane>

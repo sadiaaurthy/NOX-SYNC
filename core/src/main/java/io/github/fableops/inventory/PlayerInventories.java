@@ -33,6 +33,15 @@ public class PlayerInventories {
         return (side == 1) ? inventoryP1 : inventoryP2;
     }
 
+    // Both inventories and the shared slot, with the panels closed
+    public void clear() {
+        inventoryP1.clear();
+        inventoryP2.clear();
+        shared.clear();
+        uiP1.close();
+        uiP2.close();
+    }
+
     public boolean isOpen(int side) {
         return (side == 1) ? uiP1.isOpen() : uiP2.isOpen();
     }
