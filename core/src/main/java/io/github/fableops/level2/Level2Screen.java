@@ -2,6 +2,7 @@ package io.github.fableops.level2;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
@@ -70,7 +71,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     private final PlayerInventories inventories;
     private final Level2Map world = new Level2Map();
     private final CoreObject core;
-    private final LootField loot = new LootField();
+    private final LootField loot;
     private final Gun gun = new Gun();
     private final Hud hud;
     private final EnemySprites enemySprites;
@@ -114,12 +115,14 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         this(server, client, hostSession, clientSession, story, sideOneRole,
             new Player(sideOneRole.sheetName(), 0f, 0f, Input.Keys.W, Input.Keys.S, Input.Keys.A, Input.Keys.D, null, 1),
             new Player(sideOneRole.other().sheetName(), 0f, 0f, Input.Keys.UP, Input.Keys.DOWN, Input.Keys.LEFT, Input.Keys.RIGHT, null, 2),
-            new EnemySprites(), new Hud(), new PlayerInventories());
+            new EnemySprites(), new Hud(), new PlayerInventories(), new Random().nextLong());
     }
 
+    // lootSeed: same value on host and client (relayed in Level2StartMessage) so both machines
+    // roll the same random loot layout instead of the client generating its own
     public Level2Screen(GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession,
                         StoryGate story, Role sideOneRole, Player player1, Player player2,
-                        EnemySprites enemySprites, Hud hud, PlayerInventories inventories) {
+                        EnemySprites enemySprites, Hud hud, PlayerInventories inventories, long lootSeed) {
         this.sideOneRole = sideOneRole;
         this.server = server;
         this.client = client;
@@ -135,6 +138,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         this.hud = hud;
         this.inventories = inventories;
         this.core = new CoreObject(inventories);
+        this.loot = new LootField(world, lootSeed);
         this.swarm = new SwarmController(enemySprites, SPAWN_INITIAL_DELAY_SECONDS, SPAWN_INTERVAL_SECONDS);
 
         player1.setWorld(world, 1);

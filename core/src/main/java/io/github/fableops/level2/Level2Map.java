@@ -20,6 +20,7 @@ import io.github.fableops.world.CollisionMask;
 // FFFF00 spawn, FFFFFF core pedestal, FEDCBA reactor socket
 public class Level2Map implements Collidable {
 
+    private static final byte CLASS_FLOOR = 1;
     private static final byte CLASS_EXIT = 2;
     private static final byte CLASS_SPAWN = 3;
     private static final byte CLASS_CORE = 4;
@@ -139,6 +140,23 @@ public class Level2Map implements Collidable {
     @Override
     public boolean collides(float x, float y, float w, float h, int playerSide) {
         return mask.blocksBox(x, y, w, h, exitOpen ? WALK_OPEN : WALK_SEALED);
+    }
+
+    // Random loot placement: plain floor only, clear of walls and clear of every special zone
+    // (plus a margin) so a roll never lands on the spawn, core, socket or exit
+    public boolean isLootSpot(float centreX, float centreY, float size, float keyAreaMargin) {
+        float half = size / 2f;
+        if (mask.blocksBox(centreX - half, centreY - half, size, size, WALK_SEALED)) return false;
+        if (mask.classAt(centreX, centreY) != CLASS_FLOOR) return false;
+        return !withinMargin(spawnZone, centreX, centreY, keyAreaMargin)
+            && !withinMargin(exitZone, centreX, centreY, keyAreaMargin)
+            && !withinMargin(coreZone, centreX, centreY, keyAreaMargin)
+            && !withinMargin(socketZone, centreX, centreY, keyAreaMargin);
+    }
+
+    private static boolean withinMargin(Rectangle zone, float x, float y, float margin) {
+        return x >= zone.x - margin && x <= zone.x + zone.width + margin
+            && y >= zone.y - margin && y <= zone.y + zone.height + margin;
     }
 
     @Override

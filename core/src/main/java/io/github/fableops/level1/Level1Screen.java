@@ -2,6 +2,7 @@ package io.github.fableops.level1;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
@@ -278,7 +279,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
                 restartLocalState();
                 break;
             case "LEVEL2_START":
-                advanceToLevel2();
+                advanceToLevel2(Level2StartMessage.deserialize(body).getLootSeed());
                 break;
             default:
                 break;
@@ -355,13 +356,15 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
             controller != null ? controller::restartLevel1 : null);
     }
 
-    private void advanceToLevel2() {
+    // lootSeed: generated fresh by whichever side triggers the advance (the host, from checkExitGate())
+    // and relayed to the client inside Level2StartMessage, so both machines roll the same loot layout
+    private void advanceToLevel2(long lootSeed) {
         if (advancing) return;
         advancing = true;
         story.begin(StoryBeat.LEVEL_2);
-        if (hostSession != null) hostSession.send(new Level2StartMessage());
+        if (hostSession != null) hostSession.send(new Level2StartMessage(lootSeed));
         Level2Screen next = new Level2Screen(server, client, hostSession, clientSession, story, sideOneRole,
-            player1, player2, enemySprites, hud, inventories);
+            player1, player2, enemySprites, hud, inventories, lootSeed);
         disposed = true;
         disposeLevel1OnlyResources();
         game.setScreen(next);
@@ -413,7 +416,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
     private void checkExitGate() {
         if (controller == null || missionFailed || !world.isExitGateOpen()) return;
         Rectangle gate = world.getExitGateZone();
-        if (player1.colliderOverlaps(gate) && player2.colliderOverlaps(gate)) advanceToLevel2();
+        if (player1.colliderOverlaps(gate) && player2.colliderOverlaps(gate)) advanceToLevel2(new Random().nextLong());
     }
 
     // Only hits when a new swing starts, so holding the button hits once per animation

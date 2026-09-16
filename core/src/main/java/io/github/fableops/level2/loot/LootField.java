@@ -2,6 +2,7 @@ package io.github.fableops.level2.loot;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Texture;
@@ -12,12 +13,25 @@ import io.github.fableops.inventory.InventoryItem;
 import io.github.fableops.inventory.PlayerInventories;
 import io.github.fableops.level2.CoreObject;
 import io.github.fableops.level2.Gun;
+import io.github.fableops.level2.Level2Map;
 
 // Every loot drop placed in the maze. Low and medium tiers can be picked up any time; the high tier
 // only unlocks while the core is being carried, which is the push-your-luck part of the level
 public class LootField {
 
     private static final float MARKER_SIZE = 60f;
+
+    // Randomised layout: same seed on host and client, via Level2StartMessage, so both
+    // machines place loot identically without either one dictating to the other over the network
+    private static final float WORLD_EDGE_MARGIN = 80f; // stay off the outer map edge
+    private static final float KEY_AREA_MARGIN = 90f; // stay clear of spawn/core/socket/exit
+    private static final float MIN_LOOT_SEPARATION = 180f; // loot items don't cluster together
+    private static final int MAX_PLACEMENT_ATTEMPTS = 200;
+    // Used only if 200 random tries somehow all fail to find a legal spot (extremely unlikely
+    // on this map) - keeps the level completable instead of throwing
+    private static final float[][] FALLBACK_POSITIONS = {
+        {700f, 724f}, {200f, 830f}, {350f, 564f}, {950f, 564f}, {1100f, 400f}
+    };
 
     private final Texture gunIcon = new Texture(Gdx.files.internal("LootWeapon.png"));
     private final Texture ammoCacheIcon = new Texture(Gdx.files.internal("LootAmmoCache.png"));
@@ -29,21 +43,64 @@ public class LootField {
     private final LootDrop gunDrop;
     private float glowTime = 0f;
 
-    // Both machines build the same list, the ids are what travels over the network
-    public LootField() {
-        int id = 0;
+    // Both machines build the same list from the same seed, so the ids and positions that
+    // travel over the network (pickups reference ids only) line up on both sides
+    public LootField(Level2Map world, long seed) {
+        Random rng = new Random(seed);
+        List<float[]> placed = new ArrayList<>();
+
+        float[] p0 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[0]);
         // Not shareable, so the gun stays with whoever picked it up and both machines agree who shoots
-        gunDrop = new LootDrop(id++, LootTier.MEDIUM, 700f, 724f, new InventoryItem("Sidearm",
+        gunDrop = new LootDrop(0, LootTier.MEDIUM, p0[0], p0[1], new InventoryItem("Sidearm",
             "Fires where you face. Hold attack to shoot, R reloads.", gunIcon, 0f, false), 0);
         drops.add(gunDrop);
-        drops.add(new LootDrop(id++, LootTier.LOW, 200f, 830f, new InventoryItem("Ammo Cache",
+
+        float[] p1 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[1]);
+        drops.add(new LootDrop(1, LootTier.LOW, p1[0], p1[1], new InventoryItem("Ammo Cache",
             "Rounds for the sidearm.", ammoCacheIcon, 0f, false), Gun.CACHE_ROUNDS));
-        drops.add(item(id++, LootTier.MEDIUM, 350f, 564f, "Med kit",
+
+        float[] p2 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[2]);
+        drops.add(item(2, LootTier.MEDIUM, p2[0], p2[1], "Med kit",
             "Patches you up. Doesn't need the core.", medKitIcon, 35f));
-        drops.add(item(id++, LootTier.MEDIUM, 950f, 564f, "Shield Cell",
+
+        float[] p3 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[3]);
+        drops.add(item(3, LootTier.MEDIUM, p3[0], p3[1], "Shield Cell",
             "A temporary shield charge.", shieldCellIcon, 0f));
-        drops.add(item(id++, LootTier.HIGH, 1100f, 400f, "Rare Plating",
+
+        float[] p4 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[4]);
+        drops.add(item(4, LootTier.HIGH, p4[0], p4[1], "Rare Plating",
             "Rare armour. Only appears while the core is carried.", premiumShieldIcon, 0f));
+    }
+
+    // Tries random points until Level2Map's own collision mask says one is legal floor, clear of
+    // every objective zone, and far enough from loot already placed this session
+    private static float[] randomSpot(Level2Map world, Random rng, List<float[]> placed, float[] fallback) {
+        float minX = WORLD_EDGE_MARGIN;
+        float maxX = world.getWorldWidth() - WORLD_EDGE_MARGIN;
+        float minY = WORLD_EDGE_MARGIN;
+        float maxY = world.getWorldHeight() - WORLD_EDGE_MARGIN;
+
+        for (int attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS; attempt++) {
+            float x = minX + rng.nextFloat() * (maxX - minX);
+            float y = minY + rng.nextFloat() * (maxY - minY);
+            if (!world.isLootSpot(x, y, MARKER_SIZE, KEY_AREA_MARGIN)) continue;
+            if (tooCloseToPlaced(placed, x, y)) continue;
+            float[] spot = {x, y};
+            placed.add(spot);
+            return spot;
+        }
+        placed.add(fallback);
+        return fallback;
+    }
+
+    private static boolean tooCloseToPlaced(List<float[]> placed, float x, float y) {
+        float minDistSq = MIN_LOOT_SEPARATION * MIN_LOOT_SEPARATION;
+        for (float[] p : placed) {
+            float dx = p[0] - x;
+            float dy = p[1] - y;
+            if (dx * dx + dy * dy < minDistSq) return true;
+        }
+        return false;
     }
 
     // Low and medium loot can be handed over through the shared slot, high-value gear stays personal
