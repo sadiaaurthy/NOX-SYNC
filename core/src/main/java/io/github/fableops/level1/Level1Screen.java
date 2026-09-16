@@ -8,6 +8,8 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.OrthographicCamera;
+import com.badlogic.gdx.graphics.Pixmap;
+import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
@@ -54,6 +56,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
     private static final String ALERT_MAXED = "The alert meter maxed out.";
     private static final String DEBUG_FOCUS_P1 = "SPACE = switch terminal   (typing into: player 1)";
     private static final String DEBUG_FOCUS_P2 = "SPACE = switch terminal   (typing into: player 2)";
+    private static final float DARKNESS_MASK_SIZE = 2800f;
 
     private final Game game;
     private final GameServer server;
@@ -73,6 +76,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
     private final Hud hud = new Hud();
     private final EnemySprites enemySprites = new EnemySprites();
     private final SwarmController swarm = new SwarmController(enemySprites);
+    private final Texture darknessMask = createDarknessMask();
     private final Player player1;
     private final Player player2;
     // null on the client
@@ -152,6 +156,51 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
             popupP2.setSubmitListener((position, guess) ->
                 clientSession.send(new EnteredDigitMessage(position, guess, 2)));
         }
+    }
+
+    private static Texture createDarknessMask() {
+        int size = 512;
+        Pixmap pixmap = new Pixmap(size, size, Pixmap.Format.RGBA8888);
+        pixmap.setBlending(Pixmap.Blending.None);
+
+        float cx = size / 2f;
+        float cy = size / 2f;
+
+        // Player vision radius in world units:
+        // Inside 70 world units: 100% visible (the player and their immediate space)
+        // Between 70 and 220 world units: smooth feathered falloff
+        // Beyond 220 world units: pitch dark station emergency lighting
+        float innerWorldRadius = 70f;
+        float outerWorldRadius = 220f;
+
+        float innerRadius = (innerWorldRadius / DARKNESS_MASK_SIZE) * size;
+        float outerRadius = (outerWorldRadius / DARKNESS_MASK_SIZE) * size;
+
+        float r = 0.02f, g = 0.03f, b = 0.05f;
+        float maxDarkness = 0.96f;
+
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                float dx = x - cx;
+                float dy = y - cy;
+                float dist = (float) Math.sqrt(dx * dx + dy * dy);
+
+                if (dist <= innerRadius) {
+                    pixmap.setColor(r, g, b, 0f);
+                } else if (dist >= outerRadius) {
+                    pixmap.setColor(r, g, b, maxDarkness);
+                } else {
+                    float t = (dist - innerRadius) / (outerRadius - innerRadius);
+                    float smoothT = 0.5f - 0.5f * (float) Math.cos(t * Math.PI);
+                    pixmap.setColor(r, g, b, smoothT * maxDarkness);
+                }
+                pixmap.drawPixel(x, y);
+            }
+        }
+        Texture texture = new Texture(pixmap);
+        texture.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+        pixmap.dispose();
+        return texture;
     }
 
     private final class PuzzleListener implements Level1Listener {
@@ -510,7 +559,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
     }
 
     // Called once per camera by SplitScreen.drawHalves()
-    @Override
+        @Override
     public void drawHalf(OrthographicCamera camera) {
         world.render(batch, camera);
         world.renderOverlays(shape, camera, plateP1Held, plateP2Held);
@@ -528,6 +577,17 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
         }
         player1.draw(batch);
         player2.draw(batch);
+
+        // Blackout spotlight: stays active until all 3 stages are solved or skipped with K
+        if (!reactorUnlocked) {
+            Player focus = (camera == player1.camera) ? player1 : player2;
+            batch.setColor(1f, 1f, 1f, 1f);
+            batch.draw(darknessMask, 
+                focus.centreX() - DARKNESS_MASK_SIZE / 2f, 
+                focus.centreY() - DARKNESS_MASK_SIZE / 2f, 
+                DARKNESS_MASK_SIZE, DARKNESS_MASK_SIZE);
+        }
+
         batch.end();
     }
 
@@ -586,6 +646,7 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
 
     // Not the connections, Level 2 keeps using them
     private void disposeLocalResources() {
+        darknessMask.dispose();
         batch.dispose();
         shape.dispose();
         font.dispose();
