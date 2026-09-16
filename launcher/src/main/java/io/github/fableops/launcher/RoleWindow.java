@@ -26,24 +26,19 @@ final class RoleWindow {
     private final RoleController controller;
 
     // 1 on the host and in debug, 2 on the client
-    private final int localPlayerId;
+    private int localPlayerId;
     // null in debug, where one machine picks for both sides
-    private final MessageChannel session;
+    private MessageChannel session;
     // Handed side 1's operator, which is all the game needs
-    private final Consumer<Role> onReady;
-    private final Runnable onCancel;
+    private Consumer<Role> onReady;
+    private Runnable onCancel;
 
     private Role selected = Role.BREAKER;
     private boolean locked;
     private Role remoteLocked;
     private boolean finished;
 
-    RoleWindow(int localPlayerId, MessageChannel session, Consumer<Role> onReady, Runnable onCancel) {
-        this.localPlayerId = localPlayerId;
-        this.session = session;
-        this.onReady = onReady;
-        this.onCancel = onCancel;
-
+    RoleWindow() {
         FXMLLoader loader = new FXMLLoader(getClass().getResource("roles.fxml"));
         Parent root;
         try {
@@ -61,6 +56,28 @@ final class RoleWindow {
         stage.setScene(scene);
         stage.setX(bounds.getMinX());
         stage.setY(bounds.getMinY());
+    }
+
+    RoleWindow(int localPlayerId, MessageChannel session, Consumer<Role> onReady, Runnable onCancel) {
+        this();
+        this.localPlayerId = localPlayerId;
+        this.session = session;
+        this.onReady = onReady;
+        this.onCancel = onCancel;
+    }
+
+    // FX thread
+    void open(int localPlayerId, MessageChannel session, Consumer<Role> onReady, Runnable onCancel) {
+        this.localPlayerId = localPlayerId;
+        this.session = session;
+        this.onReady = onReady;
+        this.onCancel = onCancel;
+        this.selected = Role.BREAKER;
+        this.locked = false;
+        this.remoteLocked = null;
+        this.finished = false;
+
+        open();
     }
 
     // FX thread

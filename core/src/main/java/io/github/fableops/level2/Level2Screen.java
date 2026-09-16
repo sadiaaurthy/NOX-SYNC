@@ -62,14 +62,14 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     private final SpriteBatch batch = new SpriteBatch();
     private final ShapeRenderer shape = new ShapeRenderer();
     private final UiViewport ui = new UiViewport();
-    private final PlayerInventories inventories = new PlayerInventories();
+    private final PlayerInventories inventories;
     private final Level2Map world = new Level2Map();
-    private final CoreObject core = new CoreObject(inventories);
+    private final CoreObject core;
     private final LootField loot = new LootField();
     private final Gun gun = new Gun();
-    private final Hud hud = new Hud();
-    private final EnemySprites enemySprites = new EnemySprites();
-    private final SwarmController swarm = new SwarmController(enemySprites);
+    private final Hud hud;
+    private final EnemySprites enemySprites;
+    private final SwarmController swarm;
     private final Player player1;
     private final Player player2;
 
@@ -106,6 +106,15 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
 
     public Level2Screen(GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession,
                         StoryGate story, Role sideOneRole) {
+        this(server, client, hostSession, clientSession, story, sideOneRole,
+            new Player(sideOneRole.sheetName(), 0f, 0f, Input.Keys.W, Input.Keys.S, Input.Keys.A, Input.Keys.D, null, 1),
+            new Player(sideOneRole.other().sheetName(), 0f, 0f, Input.Keys.UP, Input.Keys.DOWN, Input.Keys.LEFT, Input.Keys.RIGHT, null, 2),
+            new EnemySprites(), new Hud(), new PlayerInventories());
+    }
+
+    public Level2Screen(GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession,
+                        StoryGate story, Role sideOneRole, Player player1, Player player2,
+                        EnemySprites enemySprites, Hud hud, PlayerInventories inventories) {
         this.sideOneRole = sideOneRole;
         this.server = server;
         this.client = client;
@@ -115,10 +124,16 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         this.isHost = (server != null);
         this.isDebug = (server == null && client == null);
 
-        player1 = new Player(sideOneRole.sheetName(), 0f, 0f,
-            Input.Keys.W, Input.Keys.S, Input.Keys.A, Input.Keys.D, world, 1);
-        player2 = new Player(sideOneRole.other().sheetName(), 0f, 0f,
-            Input.Keys.UP, Input.Keys.DOWN, Input.Keys.LEFT, Input.Keys.RIGHT, world, 2);
+        this.player1 = player1;
+        this.player2 = player2;
+        this.enemySprites = enemySprites;
+        this.hud = hud;
+        this.inventories = inventories;
+        this.core = new CoreObject(inventories);
+        this.swarm = new SwarmController(enemySprites);
+
+        player1.setWorld(world, 1);
+        player2.setWorld(world, 2);
         player2.setAlternateRightKey(Input.Keys.L);
         SplitScreen.fitCameras(player1, player2);
         world.placeAtSpawn(player1, true);

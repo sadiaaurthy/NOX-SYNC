@@ -117,6 +117,7 @@ public class LauncherController {
         clock.setCycleCount(Timeline.INDEFINITE);
         setUpStars();
         setAnimating(true);
+        roleWindow = new RoleWindow();
         preloadGame();
     }
 
@@ -342,10 +343,9 @@ public class LauncherController {
 
     // Both machines are on the line, so each side picks an operator while the game keeps warming
     private void chooseRoles(Session session) {
-        roleWindow = new RoleWindow(session.localPlayerId, session.channel(),
+        roleWindow.open(session.localPlayerId, session.channel(),
             role -> startMatch(session, role),
             () -> backToMenu(session));
-        roleWindow.open();
         menuStage().hide();
         setAnimating(false);
     }
@@ -355,7 +355,6 @@ public class LauncherController {
         storyWindow = new StoryWindow();
         storyWindow.open(StoryBeat.START);
         roleWindow.hide();
-        roleWindow = null;
         game.begin(session.server, session.client, session.hostSession, session.clientSession,
             storyWindow, sideOneRole);
     }
@@ -363,7 +362,7 @@ public class LauncherController {
     // ESC out of operator select: drop the connection, keep the preloaded game for the next try
     private void backToMenu(Session session) {
         session.stop();
-        roleWindow = null;
+        roleWindow.hide();
         statusLabel.setText(IDLE_STATUS);
         setAnimating(true);
         menuStage().show();

@@ -355,16 +355,15 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
             controller != null ? controller::restartLevel1 : null);
     }
 
-    // The connections carry over to Level 2, so only this screen's own resources are freed.
-    // The scenario window goes up first, so Level 2 loads behind it
     private void advanceToLevel2() {
         if (advancing) return;
         advancing = true;
         story.begin(StoryBeat.LEVEL_2);
         if (hostSession != null) hostSession.send(new Level2StartMessage());
-        Level2Screen next = new Level2Screen(server, client, hostSession, clientSession, story, sideOneRole);
+        Level2Screen next = new Level2Screen(server, client, hostSession, clientSession, story, sideOneRole,
+            player1, player2, enemySprites, hud, inventories);
         disposed = true;
-        disposeLocalResources();
+        disposeLevel1OnlyResources();
         game.setScreen(next);
     }
 
@@ -637,24 +636,24 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
     public void dispose() {
         if (disposed) return;
         disposed = true;
-        disposeLocalResources();
+        disposeLevel1OnlyResources();
+        inventories.dispose();
+        player1.dispose();
+        player2.dispose();
+        enemySprites.dispose();
+        hud.dispose();
         if (server != null) server.stop();
         if (client != null) client.stop();
         if (hostSession != null) hostSession.stop();
         if (clientSession != null) clientSession.stop();
     }
 
-    // Not the connections, Level 2 keeps using them
-    private void disposeLocalResources() {
+    // Only resources that belong exclusively to Level 1 and are not passed to Level 2
+    private void disposeLevel1OnlyResources() {
         darknessMask.dispose();
         batch.dispose();
         shape.dispose();
         font.dispose();
-        inventories.dispose();
-        player1.dispose();
-        player2.dispose();
         world.dispose();
-        enemySprites.dispose();
-        hud.dispose();
     }
 }

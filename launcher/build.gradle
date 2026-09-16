@@ -6,9 +6,8 @@ plugins {
 application {
   // Launcher instead of LauncherApp, otherwise JavaFX says "runtime components are missing"
   mainClass = 'io.github.fableops.launcher.Launcher'
-  // Small heap and serial GC for a faster start and less RAM
-  applicationDefaultJvmArgs = ['-XX:+UseSerialGC', '-XX:TieredStopAtLevel=1', '-Xms32m', '-Xmx256m',
-                               '--enable-native-access=ALL-UNNAMED']
+  // Allow C2 JIT optimization, parallel GC, and adequate heap for JavaFX + LibGDX
+  applicationDefaultJvmArgs = ['-Xms64m', '-Xmx512m', '--enable-native-access=ALL-UNNAMED']
 }
 
 javafx {

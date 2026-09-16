@@ -47,8 +47,8 @@ public class Player {
     private final int keyUp, keyDown, keyLeft, keyRight;
     // -1 means unset. It is checked explicitly because Input.Keys.ANY_KEY is also -1.
     private int keyRightAlt = -1;
-    private final Collidable world;
-    private final int side;
+    private Collidable world;
+    private int side;
 
     private float camW, camH;
     private float stateTime = 0f;
@@ -259,6 +259,11 @@ public class Player {
         if (dx != 0 && !world.collides(x + dx, y, bounds.footW, bounds.footH, side)) x += dx;
         if (dy != 0 && !world.collides(x, y + dy, bounds.footW, bounds.footH, side)) y += dy;
         updateCamera();
+    }
+
+    public void setWorld(Collidable world, int side) {
+        this.world = world;
+        this.side = side;
     }
 
     public void placeAt(float x, float y) {
