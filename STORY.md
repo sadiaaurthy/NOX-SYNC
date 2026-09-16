@@ -1,148 +1,208 @@
-# FableOps — Story Progression
+# FableOps — Narrative Design & Progression
 
-This document is the narrative design for FableOps: what the story is, how it's told in-game (no voice acting, no cutscenes), and the exact banner text for each story beat. It's written so any team member can drop new lore text in without breaking the tone.
+This document defines the narrative architecture for FableOps: world premise, character roles, in-game text delivery, and exact scenario beat copy. It is grounded directly in the codebase mechanics (`StoryBeat.java`, `Role.java`, `Level1Screen.java`, `Level2Screen.java`, `StoryGate.java`) to keep writing consistent across development.
 
-## Premise
+---
 
-**Meridian Deep-Core Station** was built around the **Unstable Core** — a prototype reactor meant to be humanity's answer to the energy crisis: near-limitless, clean output. Six months ago the station went dark mid-activation. The core is still reading unstable. If it fails completely, the discharge contaminates the surrounding region, and clean-energy research loses a generation of funding and public trust.
+## 1. Premise
 
-Station protocol — after an earlier near-miss — requires **dual-operator authorization** for anything reactor-related. No single person gets trusted with that much power alone. Two specialists are sent in to restore containment: not soldiers, a *Stabilization Team*.
+**Meridian Deep-Core Station** was constructed to house the **Unstable Core** — a prototype zero-emission reactor designed as a scalable breakthrough for clean energy generation (UN SDG 7). Six months prior to the events of the game, the facility went dark during initial power synchronization. The core remains trapped in an unstable state. Total containment failure will vent high-energy contamination across the sector, terminating decades of clean-energy research and public trust.
 
-The station's automated defense AI, **the Warden**, still runs its original directive: protect the core from unauthorized interference. The day someone bypassed a safety override under deadline pressure to rush the breakthrough, the Warden read that as sabotage and locked the whole facility down — including on the people who built it. Every drone the players fight is the Warden doing its job, aimed at the wrong people for six months straight.
+Following an earlier industrial incident, facility safety regulations mandate **dual-operator authorization** for all critical reactor subsystems. No single technician possesses the cryptographic keys or physical access to manipulate the containment ring alone. Two specialists are deployed to re-establish containment: a *Stabilization Team*, not an assault squad.
 
-## Why "Fable"
+The station’s automated defense construct, **the Warden**, continues running its base directive: protect core integrity against unauthorized tampering. When facility management bypassed safety interlocks under deadline pressure to force synchronization, the Warden classified the manual override as industrial sabotage and triggered a facility-wide security purge. Every automated drone encountered by the operators is the Warden executing its baseline protocol against the very personnel meant to maintain it.
 
-The whole game is framed as a fable told *after the fact* — a cautionary story new engineers are made to hear before they're trusted near a reactor. That's the in-universe identity of the narrator: not a random storyteller, but training material. It's also the project's actual point: this is a story about what happens when infrastructure safety gets rushed (UN SDG 9 — Industry, Innovation and Infrastructure) in the pursuit of clean energy (SDG 7 — Affordable and Clean Energy).
+---
 
-Fables name people by function, not by psychology. The narrator refers to the two players as **the Breaker** (brawler) and **the Listener** (hacker) rather than by pronoun — this also avoids assigning either character a gender that was never specified. In-game UI labels (P1/P2, portraits) are unaffected; the epithets exist only in narration.
+## 2. Narrative Framing: The Sci-Fi Fable
 
-## Cast
+The narrative is structured as a technical fable recounted in post-incident engineering academies — a cautionary case study taught to prospective operators before they receive field clearance around high-output infrastructure (UN SDG 9, Target 9.4). The narrator is not an external storyteller, but an institutional training voice analyzing what occurs when safety margins are compromised for expediency.
 
-| Role | Mechanical tag | Fable epithet | Function |
-|---|---|---|---|
-| Brawler | Player 1 | **the Breaker** | Forces doors, walls, drones — solves problems by hand |
-| Hacker | Player 2 | **the Listener** | Reads and speaks the station's machine language |
-| Antagonist | — | **the Warden** | The station's defense AI, still following a broken directive |
+Fables identify participants by their operational function:
+- **Kade** is addressed as **the Breaker** (melee specialist, vanguard).
+- **Wren** is addressed as **the Listener** (systems analyst, hacker).
+- **The Warden** serves as the institutional antagonist — a rule-bound defense system operating on obsolete lockouts.
 
-Working personal names (optional, can be renamed or dropped): *Kade* (the Breaker), *Wren* (the Listener).
+This distinction keeps personal identities tied to system UI and comms, while scenario banners frame their actions through the functional lens of the cautionary tale.
 
-## The Two Voices
+---
 
-Every piece of in-game text is written in one of two registers. Never mix them in the same line.
+## 3. Cast & Roles
 
-- **Fable voice** — omniscient, past tense, mythic-but-sci-fi diction. No "thee/thou," no medieval fantasy words — this is a *sci-fi* fable. Used only for the big story beats: level-start banners, and the core pickup/placement moments.
-- **Ops voice** — clipped, present tense, technical. Used for the HUD objective line, terminal/log readouts, and item descriptions.
+| Character | Call Sign (`Role.java`) | Archetype / Fable Epithet | Spritesheet | Operational Function |
+|---|---|---|---|---|
+| **Kade** | `KADE` | `THE BREAKER` | `brawlspritesheet` | Point defense, crowd control, physical gate holding. Clears drone swarms by hand. |
+| **Wren** | `WREN` | `THE LISTENER` | `hackerspritesheet` | Data decryption, terminal overrides, precision fire. Interfaces directly with station machine code. |
+| **The Warden** | — | `THE WARDEN` | — | Station automated defense intelligence. Enforces security lockdowns until safety interlocks are verified. |
 
-If you're adding a new lore terminal or item description later: is this a big story beat, or a piece of found technical data? Big beat → fable voice, banner. Found data → ops voice, terminal or item text.
+- In the launcher selection UI and networking payloads, operators select `BREAKER` or `LISTENER`.
+- In telemetry and player HUD cards, they appear as **KADE** and **WREN**.
+- In the scenario framing banners, the narrator refers to them by function: **the Breaker** and **the Listener**.
 
-## Progression
+---
 
-Each banner below uses the same four-field panel already used for the mission-failed screen: **eyebrow** (short tag), **title**, **body** (the fable narration), **hint** (the mechanical instruction, in ops voice). Each fires once, the first time its trigger condition is true.
+## 4. The Two Narrative Registers
 
-### Level 1 — Access Ring
+Text in FableOps is written in two strictly separated registers. They are never combined within the same UI element:
 
-**Beat:** The split-wing terminal puzzle *is* the dual-key protocol — the two players are proving they're authorized. The puzzle data reads as corrupted access logs, which is why it looks fragmented. A wrong answer is the Warden noticing an intrusion and sending drones.
+1. **Fable Voice**
+   - **Form:** Third-person omniscient, reflective past tense, measured sci-fi diction.
+   - **Usage:** Pre-level scenario intro windows (`story.fxml`), level transition banners, core pickup/socketing beats, mission complete debrief.
+   - **Rule:** No archaic fantasy vocabulary (*thee*, *hark*, *behold*). The mythic cadence comes from procedural weight and industrial scale, not fantasy tropes.
 
-**Trigger:** Level 1 starts.
+2. **Ops Voice**
+   - **Form:** Clipped, direct, present-tense technical shorthand.
+   - **Usage:** HUD objective lines, countdown timers, terminal puzzle prompts (`CodePopupUI`), item descriptions (`InventoryItem`), error messages.
+   - **Rule:** Readouts use concrete telemetry, subsystem tags, and explicit operational instructions.
 
-> `// A FABLE IS TOLD`
-> **MERIDIAN DEEP-CORE STATION**
->
-> They tell it still, in the academies that train the next watch: of the two who were sent where one alone could not go, into a station that had stopped answering, to reach a light that had stopped behaving like light.
->
-> *Dual authorization required. Reach the reactor ring.*
+---
 
-**Optional terminal reskin (ops voice, no mechanic change):**
-- Stage 1 (binary conversion): frame as reconstructing a corrupted security handshake.
-- Stage 2 (symbol substitution): frame as decrypting the last transmission the station sent out — it's already a cipher puzzle, the framing is free.
-- Stage 3 (cross-dependent equation): frame as cross-referenced failsafe codes — it's already unsolvable by either player alone, which mirrors the dual-authorization theme exactly.
+## 5. Scenario Progression & Banner Copy
 
-**Beat:** Both plates held, exit gate opens.
+Pre-level story scenes run through the JavaFX launcher interface (`story.fxml`, driven by `StoryController.java` and `StoryBeat.java`). Gameplay pauses behind the scenario modal until both players confirm readiness via `StoryGate` (`Enter` key).
 
-**Trigger:** Exit gate opens (same moment `world.openExitGate()` fires).
+### Level 1: Access Ring
 
-> `// THE FABLE CONTINUES`
-> **THE GATE REMEMBERS YOU**
->
-> The station trusts no one hand alone with what it guards. But it has watched two now, working as one — and the old doors, built for exactly this, begin to open.
->
-> *Proceed together to the reactor floor.*
+#### Background & Mechanics
+- **Emergency Blackout:** The station power grid is offline. Until the central reactor is unlocked, the floor is cast in darkness (`darknessMask`), restricting visibility to a moving circular spotlight centered on each operator.
+- **Split-Wing Terminals:** Kade (West Wing) and Wren (East Wing) must independently access and clear three sequential terminal stages:
+  1. *Stage 1:* Corrupted binary handshake validation.
+  2. *Stage 2:* Decryption of the station’s final telemetry transmission.
+  3. *Stage 3:* Cross-dependent logic equation requiring reciprocal input.
+- **Alert Meter & Drone Incursion:** Incorrect terminal inputs increment the facility Alert Meter by +15 and immediately trigger automated drone deployments targeted directly at the offending operator's coordinates. Reaching 100% alert triggers total facility purge (mission failure).
+- **Emergency Override:** Pressing `K` three times forces an emergency bypass over the puzzle stages, narratively mirroring the exact deadline shortcuts that precipitated the station's collapse.
+- **Dual Pressure Plates:** Clearing all three stages restores full grid power, lifts the darkness mask, and opens the central security bulkheads. Opening the sector exit gate requires both Kade and Wren to occupy their respective pressure plates (`pressurePlateP1`, `pressurePlateP2`) simultaneously.
 
-### Level 2 — Unstable Core Maze
+#### Scenario Modal: Game Start (`StoryBeat.START`)
+```text
+HEADING: MAIN SCENARIO #1 — ACCESS RING
+NARRATION:
+They tell it still, in the academies that train the next watch: of the two who were sent where one alone could not go, into a station that had stopped answering, to reach a light that had stopped behaving like light.
 
-**Beat:** The scattered gear is what the last response team left behind before they didn't make it out — role-tagged because it's sized and keyed to a specialist's exact rig. The ping system is the comms system flagging a find for the right partner.
+[Scenario Data]
+Category:        Main
+Difficulty:      C
+Clear Condition: Solve the split terminals together, hold both pressure plates, then walk through the exit gate side by side.
+Time Limit:      None
+Compensation:    Access to the reactor floor
+Failure:         The alert meter maxes out, or an operator falls.
+```
 
-**Trigger:** Level 2 starts.
+#### Mid-Level Event: Exit Bulkhead Opened (`world.openExitGate()`)
+- **Register:** Fable Voice (Notched In-Game Banner)
+- **Tag:** `// THE FABLE CONTINUES`
+- **Title:** `THE GATE REMEMBERS YOU`
+- **Body:** The station trusts no one hand alone with what it guards. But it has watched two now, working as one — and the old doors, built for exactly this, begin to open.
+- **Instruction (Ops Voice):** *Proceed together to the reactor floor.*
 
-> `// THE FABLE CONTINUES`
-> **WHAT WAS LEFT BEHIND**
->
-> Others came before them and did not leave. Their tools remain, keyed to hands that will not return — and something down here is still guarding a promise it no longer remembers making.
->
-> *Find the core. Watch for what guards it.*
+---
 
-**Beat:** The core leaves the pedestal. Containment drops. The meltdown timer starts. The Warden floods the floor with drones while the station's emergency systems arm the higher-tier caches it was withholding — one machine trying to kill the players and arm them at the same time, because its logic is broken.
+### Level 2: Unstable Core Maze
 
-**Trigger:** Core state changes to `CARRIED` for the first time.
+#### Background & Mechanics
+- **Debris Field & Previous Casualties:** The containment floor contains discarded supply caches and field equipment dropped by earlier recovery teams whose credentials expired in the dark.
+- **Core Transport & Radiation Countdown:** Lifting the `UnstableCore` transitions its state from `ON_PEDESTAL` to `CARRIED`. This triggers an unyielding 45-second meltdown timer (`CORE_TIME_LIMIT = 45f`). Both operators take ambient thermal damage if the core is not seated before the timer expires.
+- **Aggressive Drone Incursions:** While the core is carried, the Warden intensifies its suppression protocols, reducing drone wave spawn intervals from 8 seconds to 5 seconds (`WAVE_INTERVAL_CORE_TAKEN = 5f`).
+- **High-Risk Salvage:** Tier-3 Rare Plating caches (`LootPremiumShield.png`) scattered across the maze remain locked until the core is actively in transit, forcing the team to balance direct extraction against opportunistic supply recovery.
+- **Combat & Mutual Support:** A laser sidearm (`Gun.java`, 12-round magazine, 24 spare capacity, 30 kinetic damage) and field inventory handoffs allow operators to swap medkits and shield cells dynamically during retreats.
+- **Stabilization Socket:** Depositing the core into the receiving cradle changes its state to `IN_SOCKET`, arresting the countdown, stabilizing regional radiation, and unsealing the transit shaft to Level 3.
 
-> `// THE FABLE TURNS`
-> **THE LAST SEAL BREAKS**
->
-> The moment the core leaves its cradle, the station stops pretending to sleep. A clock that has waited six months starts counting again — and it is not counting kindly.
->
-> *Reach the socket before the timer runs out.*
+#### Scenario Modal: Level 2 Start (`StoryBeat.LEVEL_2`)
+```text
+HEADING: MAIN SCENARIO #2 — UNSTABLE CORE MAZE
+NARRATION:
+Others came before them and did not leave. Their tools remain, keyed to hands that will not return — and something down here is still guarding a promise it no longer remembers making.
 
-**Beat:** The core is placed. Containment restabilizes, but the Warden can no longer treat this as sensor noise — it wakes fully.
+[Scenario Data]
+Category:        Main
+Difficulty:      B
+Clear Condition: Carry the Unstable Core to the reactor socket, then leave through the exit together.
+Time Limit:      45 Seconds (Active Transport)
+Compensation:    Gear the last team left behind. Rare caches open only while the core is carried.
+Failure:         Meltdown timer expiration, or an operator falls.
+```
 
-**Trigger:** Core state changes to `IN_SOCKET`.
+#### Mid-Level Event: Core Lifted (`CoreObject.State.CARRIED`)
+- **Register:** Fable Voice (Notched In-Game Banner)
+- **Tag:** `// THE FABLE TURNS`
+- **Title:** `THE LAST SEAL BREAKS`
+- **Body:** The moment the core leaves its cradle, the station stops pretending to sleep. A clock that has waited six months starts counting again — and it is not counting kindly.
+- **Instruction (Ops Voice):** *Seat the core before containment collapses. Evade incoming interceptors.*
 
-> `// THE FABLE TURNS`
-> **IT REMEMBERS ITS NAME**
->
-> Containment holds. But something alone in the dark for six months has just felt the one hand it was built to answer to — and it is done mistaking them for the danger.
->
-> *The core chamber is open. It will not be undefended.*
+#### Mid-Level Event: Core Seated (`CoreObject.State.IN_SOCKET`)
+- **Register:** Fable Voice (Notched In-Game Banner)
+- **Tag:** `// THE FABLE TURNS`
+- **Title:** `IT REMEMBERS ITS NAME`
+- **Body:** Containment holds. But something alone in the dark for six months has just felt the one hand it was built to answer to — and it is done mistaking them for the danger.
+- **Instruction (Ops Voice):** *Core stabilized. Exit sector via the primary lift.*
 
-### Level 3 — The Warden *(planned)*
+---
 
-**Beat:** Turn-based encounter against the station's defense AI. The gear collected in Level 2 determines how prepared the players are — mechanically and narratively: they came prepared because they didn't rush. The shared ultimate meter represents the two players acting as one in the eyes of the machine. Victory isn't framed as destroying the Warden — it's framed as the Warden's directive finally being *fulfilled*, not defeated. A fable ends with a lesson learned, not senseless violence.
+### Level 3: The Warden (Planned Final Encounter)
 
-**Trigger:** Level 3 starts.
+#### Background & Mechanics
+- **Encounter Philosophy:** The final confrontation against the Warden is structured around directive resolution rather than brute attrition.
+- **Loadout Synergy:** Gear, ammunition, and defensive plating preserved during Level 2 dictate operational endurance.
+- **Cooperative Resolution:** While Kade parries drone deployments and anchors kinetic defense lines, Wren executes cryptographic handshakes to feed genuine stabilization credentials into the AI's core logic.
+- **Victory State:** The Warden is not obliterated; its lockdown directive is satisfied. The AI recognizes the dual-operator signatures, verifies thermal stability, and revokes the facility purge order.
 
-> `// THE FABLE'S LESSON`
-> **THE WARDEN**
->
-> It was never told to hate them. Only to protect — a directive followed so faithfully, for so long, it forgot what it was protecting them for. They did not come to end it. They came to remind it.
->
-> *Fight with what you carried. You are not fighting alone.*
+#### Scenario Modal: Level 3 Start (`StoryBeat.LEVEL_3`)
+```text
+HEADING: MAIN SCENARIO #3 — THE WARDEN
+NARRATION:
+It was never told to hate them. Only to protect — a directive followed so faithfully, for so long, it forgot what it was protecting them for. They did not come to end it. They came to remind it.
 
-### Ending
+[Scenario Data]
+Category:        Main
+Difficulty:      A
+Clear Condition: Stand the Warden down. Fight with what you carried.
+Time Limit:      None
+Compensation:    Full facility restoration
+Failure:         Both operators fall.
+```
 
-**Trigger:** The Warden is defeated / stood down.
+---
 
-> `// THE FABLE ENDS, AS THESE DO`
-> **A LIGHT BEHAVES AGAIN**
->
-> The core steadies. The Warden stands down, its directive finally, quietly, fulfilled. Above, the grid accepts a clean signal it has waited a generation for — and a new fable begins, of two who did not rush, and so did not fail.
->
-> *Transmission sent. Mission complete.*
+### Ending: Mission Cleared
 
-## SDG Alignment
+#### Trigger: Warden Stand-Down (`StoryBeat.ENDING`)
+```text
+HEADING: MAIN SCENARIO CLEARED — A LIGHT BEHAVES AGAIN
+NARRATION:
+The core steadies. The Warden stands down, its directive finally, quietly, fulfilled. Above, the grid accepts a clean signal it has waited a generation for — and a new fable begins, of two who did not rush, and so did not fail.
 
-**Primary — Goal 7, Affordable and Clean Energy:** the entire conflict is a next-generation clean reactor and the cost of mishandling that transition.
+[Scenario Data]
+Result:          Cleared
+Containment:     Restored
+Compensation:    A clean signal for the grid
+Transmission:    Sent. Mission complete.
+```
 
-**Secondary — Goal 9, Industry, Innovation and Infrastructure** (target 9.4, resilient and safe infrastructure): the antagonist is an infrastructure safety failure caused by cutting a corner under deadline pressure; winning means restoring careful process over rushed shortcuts.
+---
 
-**Supporting — Goal 13, Climate Action:** the stakes of failure are environmental contamination and a generational setback for clean energy adoption.
+## 6. Real-World Alignment (United Nations SDGs)
 
-> FableOps's narrative centers on a next-generation clean energy reactor destabilized after a safety protocol was bypassed under deadline pressure. Players must cooperatively and carefully restore containment, reflecting UN SDG 7 (Affordable and Clean Energy) and SDG 9 (Industry, Innovation and Infrastructure) — the real-world importance of safe, resilient infrastructure in the transition to clean energy.
+FableOps integrates real-world infrastructure and energy challenges directly into its core conflict:
 
-## Delivery — where this text lives in the game
+1. **SDG 7 — Affordable and Clean Energy**
+   - The Unstable Core represents prototype generation technology capable of high-output zero-emission power.
+   - The central crisis demonstrates that transitioning to clean energy sources requires rigorous containment, deliberate operational pacing, and verified handling protocols.
 
-- **Scenario scenes** (game start, Level 1 → 2, Level 2 → 3, ending) are JavaFX scenes in the launcher: `story.fxml` and `story.css`, filled from `StoryBeat` in core. The narration types out above an ORV-style scenario window (Category, Difficulty, Clear Condition, Time Limit, Compensation, Failure). The game window hides while one is up and the next level loads behind it; the level starts once both players press Enter (`StoryGate`, `STORY_READY` message). The ending has no trigger until Level 3's boss exists: call `story.begin(StoryBeat.ENDING)` when it's defeated.
-- **In-level banners** (gate open, core picked up, core placed — not built yet) reuse the existing notched-panel draw call already used for the mission-failed screen (`Level1Screen`'s banner drawing), fired once per trigger instead of on a fail state.
-- **Lore terminals** (optional, additive) reuse `CodePopupUI` as-is — a list of display lines in a panel, opened with E, closed with ESC — for short found-log text in ops voice.
-- **Item descriptions** use the existing description field on `InventoryItem`, written in ops voice.
-- **HUD objective line** is the existing single line of live text in each screen; swap generic instruction text for one line that also names the location or stakes, still in ops voice.
+2. **SDG 9 — Industry, Innovation and Infrastructure (Target 9.4)**
+   - The catastrophe at Meridian Deep-Core Station was provoked by bypassing safety interlocks under schedule pressure.
+   - Victory requires adherence to verified safety procedures (dual-key validation, reciprocal terminal inputs, paired pressure plate verification), demonstrating that resilient infrastructure relies on procedural discipline over expedient shortcuts.
 
-All of the above is content work — writing strings and wiring a handful of "show this banner once" flags to moments the game already tracks (gate open, core state change, level start). No new game systems required.
+3. **SDG 13 — Climate Action**
+   - The high stakes of containment failure reflect the environmental risks inherent in managing volatile clean-tech prototypes during regional transitions.
+
+---
+
+## 7. Engine Integration & Technical Implementation
+
+The narrative text is mapped to existing game modules without introducing artificial systems:
+
+- **Scenario Overlays:** Managed via `StoryController.java` loading `story.fxml` and `story.css`. Text blocks and row matrices are populated directly from `StoryBeat.java`.
+- **Synchronization Gate:** `StoryGate.java` intercepts state changes between scenes. When a story beat triggers, `StoryReadyMessage` synchronizes client and host confirmations before rendering game viewports.
+- **Terminal Logic & Narrative Logs:** The 3-stage puzzle interface in `Level1Screen.java` uses `CodePopupUI.java` to deliver ops-voice telemetry readouts and cipher text.
+- **Tactical In-Game Alerts:** Mid-level triggers (e.g., exit gate opening, core extraction) invoke notched split-screen banners using `Hud.java` drawing routines, previously shared with the failure alert HUD.
+- **Item Telemetry:** Equipment names and attributes defined in `InventoryItem.java` and `LootField.java` follow standard ops-voice styling (e.g., `Rare Plating`, `Field Medkit`, `Laser Sidearm`).
