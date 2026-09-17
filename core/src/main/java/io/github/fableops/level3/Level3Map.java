@@ -127,6 +127,29 @@ public class Level3Map implements Collidable {
 
     public Rectangle getBossZone() { return bossZone; }
 
+    // Fixed anchors for the Warden encounter, derived from the boss trigger strip so both host and
+    // client compute the same points without anything needing to be painted or sent over the network.
+    // {x, y}: x is the anchor's centre, y is where the sprite's own bottom edge sits
+    public float[] getWardenAnchor() {
+        return new float[]{bossZone.x + bossZone.width / 2f,
+            Math.min(bossZone.y + bossZone.height + 260f, worldH - 520f)};
+    }
+
+    public float[] getDroneAnchor() {
+        float[] warden = getWardenAnchor();
+        return new float[]{warden[0] - 260f, warden[1] - 40f};
+    }
+
+    public float[] getTurretAnchor() {
+        float[] warden = getWardenAnchor();
+        return new float[]{warden[0] + 260f, warden[1] - 40f};
+    }
+
+    public float[] getCoreAnchor() {
+        float[] warden = getWardenAnchor();
+        return new float[]{warden[0], warden[1] - 150f};
+    }
+
     // Both operators have to be standing on the strip, so neither can start the fight alone
     public boolean bothOnBossTrigger(Player p1, Player p2) {
         return p1.colliderOverlaps(bossZone) && p2.colliderOverlaps(bossZone);
