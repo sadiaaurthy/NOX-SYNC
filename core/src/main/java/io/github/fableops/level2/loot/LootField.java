@@ -67,7 +67,7 @@ public class LootField {
             "Rounds for the sidearm.", ammoCacheIcon, 0f, false), Gun.CACHE_ROUNDS));
 
         float[] p2 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[2]);
-        drops.add(item(2, LootTier.MEDIUM, p2[0], p2[1], "Med kit",
+        drops.add(item(2, LootTier.MEDIUM, p2[0], p2[1], "Medkit",
             "Patches you up. Doesn't need the core.", medKitIcon, 35f));
 
         float[] p3 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[3]);
@@ -75,8 +75,8 @@ public class LootField {
             "A temporary shield charge.", shieldCellIcon, 0f));
 
         float[] p4 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[4]);
-        drops.add(item(4, LootTier.HIGH, p4[0], p4[1], "Rare Plating",
-            "Rare armour. Only appears while the core is carried.", premiumShieldIcon, 0f));
+        drops.add(item(4, LootTier.HIGH, p4[0], p4[1], "Premium Shield",
+            "Rare plating. Only appears while the core is carried.", premiumShieldIcon, 0f));
     }
 
     // Tries random points until Level2Map's own collision mask says one is legal floor, clear of

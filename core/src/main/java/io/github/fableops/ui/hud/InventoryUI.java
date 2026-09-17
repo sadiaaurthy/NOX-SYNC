@@ -37,6 +37,10 @@ public class InventoryUI {
     private static final Color PANEL_BG   = new Color(0.039f, 0.043f, 0.047f, 0.98f);
     private static final Color INNER_LINE = new Color(0.141f, 0.133f, 0.125f, 1f);
     private static final Color SLOT_BG    = new Color(0.078f, 0.082f, 0.086f, 1f);
+    // Some loot art is nearly black (the sidearm reads 34/255), which vanished against SLOT_BG.
+    // A filled slot gets a mid grey chip behind the icon so any art reads against it
+    private static final Color ICON_PLATE = new Color(0.34f, 0.35f, 0.37f, 1f);
+    private static final float ICON_PAD   = 14f;
     private static final Color SLOT_LINE  = new Color(0.165f, 0.165f, 0.157f, 1f);
     private static final Color TEXT       = new Color(0.929f, 0.929f, 0.909f, 1f);
     private static final Color DIM        = new Color(0.451f, 0.451f, 0.42f, 1f);
@@ -144,7 +148,7 @@ public class InventoryUI {
         drawChrome(shape, panelX, panelY, uiWorldW, uiWorldH, accent);
         drawSlots(shape, panelX, panelY, inventory, accent);
         drawPortraitFrame(shape, panelX, panelY);
-        drawSharedSlot(shape, panelX, panelY, accent);
+        drawSharedSlot(shape, panelX, panelY, accent, shared.get() != null);
 
         // One batch pass for these three, so none of them can use the ShapeRenderer
         batch.begin();
@@ -199,6 +203,12 @@ public class InventoryUI {
         for (int i = 0; i < Inventory.CAPACITY; i++) {
             shape.rect(slotX(panelX, i), slotY(panelY, i), SLOT, SLOT);
         }
+        shape.setColor(ICON_PLATE);
+        for (int i = 0; i < Inventory.CAPACITY; i++) {
+            if (inventory.get(i) == null) continue;
+            shape.rect(slotX(panelX, i) + ICON_PAD, slotY(panelY, i) + ICON_PAD,
+                SLOT - 2 * ICON_PAD, SLOT - 2 * ICON_PAD);
+        }
         shape.end();
 
         shape.begin(ShapeRenderer.ShapeType.Line);
@@ -231,13 +241,17 @@ public class InventoryUI {
     }
 
     // Kept apart from the grid so it doesn't look like one of the player's own slots
-    private void drawSharedSlot(ShapeRenderer shape, float panelX, float panelY, Color accent) {
+    private void drawSharedSlot(ShapeRenderer shape, float panelX, float panelY, Color accent, boolean filled) {
         float slotX = sharedSlotX(panelX);
         float slotY = sharedSlotY(panelY);
 
         shape.begin(ShapeRenderer.ShapeType.Filled);
         shape.setColor(SLOT_BG);
         shape.rect(slotX, slotY, SLOT, SLOT);
+        if (filled) {
+            shape.setColor(ICON_PLATE);
+            shape.rect(slotX + ICON_PAD, slotY + ICON_PAD, SLOT - 2 * ICON_PAD, SLOT - 2 * ICON_PAD);
+        }
         shape.end();
 
         shape.begin(ShapeRenderer.ShapeType.Line);
@@ -254,9 +268,17 @@ public class InventoryUI {
         drawIcon(batch, shared.get(), sharedSlotX(panelX), sharedSlotY(panelY));
     }
 
-    // 46x46 in the middle of the slot, the same size as UnstableCore.png
+    // Fitted inside the chip, keeping the art's own proportions - the icons are not all square
     private static void drawIcon(SpriteBatch batch, InventoryItem item, float slotX, float slotY) {
-        if (item != null) batch.draw(item.getIcon(), slotX + 16f, slotY + 16f, SLOT - 32f, SLOT - 32f);
+        if (item == null) return;
+        float box = SLOT - 2 * ICON_PAD;
+        float w = item.getIcon().getWidth();
+        float h = item.getIcon().getHeight();
+        float scale = Math.min(box / w, box / h);
+        float drawW = w * scale;
+        float drawH = h * scale;
+        batch.draw(item.getIcon(), slotX + ICON_PAD + (box - drawW) / 2f,
+            slotY + ICON_PAD + (box - drawH) / 2f, drawW, drawH);
     }
 
     private void drawPortraitFrame(ShapeRenderer shape, float panelX, float panelY) {
