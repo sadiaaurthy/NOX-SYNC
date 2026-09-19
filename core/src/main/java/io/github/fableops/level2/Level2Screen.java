@@ -262,9 +262,9 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         story.begin(StoryBeat.LEVEL_3);
         if (hostSession != null) hostSession.send(new Level3StartMessage());
         Level3Screen next = new Level3Screen(server, client, hostSession, clientSession, story, sideOneRole,
-            player1, player2, hud, inventories);
+            player1, player2, hud, inventories, gun, loot);
         disposed = true;
-        disposeLevel2OnlyResources();
+        disposeLevel2OnlyResources(false);
         game.setScreen(next);
     }
 
@@ -597,7 +597,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     public void dispose() {
         if (disposed) return;
         disposed = true;
-        disposeLevel2OnlyResources();
+        disposeLevel2OnlyResources(true);
         inventories.dispose();
         player1.dispose();
         player2.dispose();
@@ -610,12 +610,14 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
 
     // Only resources exclusive to Level 2 and not passed to Level 3 (player1/player2/hud/inventories
     // carry forward; Level 3 has its own enemy visuals, so the drone enemySprites doesn't)
-    private void disposeLevel2OnlyResources() {
+    private void disposeLevel2OnlyResources(boolean disposeLoot) {
         batch.dispose();
         shape.dispose();
         world.dispose();
         core.dispose();
-        loot.dispose();
+        // Collected InventoryItems still reference these icon textures in Level 3. Ownership is
+        // handed to Level3Screen during a transition and disposed there when the match ends.
+        if (disposeLoot) loot.dispose();
         enemySprites.dispose();
     }
 }

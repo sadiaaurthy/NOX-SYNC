@@ -50,6 +50,7 @@ public class Gun {
     private int owner = 0; // player id, 0 until someone picks it up
     private int magazine = MAGAZINE;
     private int spare = START_SPARE;
+    private boolean ammoCacheCollected = false;
     private float reloadLeft = 0f;
     private float cooldown = 0f;
 
@@ -70,7 +71,43 @@ public class Gun {
 
     public void giveTo(int playerId) { owner = playerId; }
 
-    public void addSpare(int rounds) { spare += rounds; }
+    public void addSpare(int rounds) {
+        spare += rounds;
+        if (rounds > 0) ammoCacheCollected = true;
+    }
+
+    public boolean hasAmmo() { return magazine > 0 || spare > 0; }
+
+    public boolean hasAmmoCache() { return ammoCacheCollected; }
+
+    public int turnBasedDamage() { return ammoCacheCollected ? 45 : DAMAGE; }
+
+    // Level 3 is turn based: one round is consumed when the carried sidearm supports a physical
+    // action. This reuses the weapon and ammunition collected in Level 2 instead of inventing a
+    // second equipment model for the Warden encounter.
+    public boolean useTurnBasedRound() {
+        if (owner == 0 || (magazine == 0 && spare == 0)) return false;
+        if (magazine == 0) {
+            int rounds = Math.min(MAGAZINE, spare);
+            magazine = rounds;
+            spare -= rounds;
+        }
+        magazine--;
+        return true;
+    }
+
+    // Level 3 resolves damage through its turn controller, but still uses the existing tracer so a
+    // weapon action is a visible shot rather than only a changed number.
+    public void showTurnBasedShot(Player shooter, float targetX, float targetY, boolean hit) {
+        fromX = shooter.centreX();
+        fromY = shooter.centreY();
+        toX = targetX;
+        toY = targetY;
+        this.hit = hit;
+        shots++;
+        tracerTimer = TRACER_TIME;
+        if (hit) hitMarkerTimer = HIT_MARKER_TIME;
+    }
 
     public void update(float delta) {
         cooldown = Math.max(0f, cooldown - delta);
@@ -193,6 +230,7 @@ public class Gun {
         owner = 0;
         magazine = MAGAZINE;
         spare = START_SPARE;
+        ammoCacheCollected = false;
         reloadLeft = 0f;
         cooldown = 0f;
         tracerTimer = 0f;

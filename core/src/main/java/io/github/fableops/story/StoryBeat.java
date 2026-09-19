@@ -29,23 +29,22 @@ public enum StoryBeat {
             {"Failure", "???"}
         }),
 
-    LEVEL_3("MAIN SCENARIO #3 — THE WARDEN",
+    LEVEL_3("THE WARDEN",
         "It was never told to hate them. Only to protect — a directive followed so faithfully, for so long, "
             + "it forgot what it was protecting them for. They did not come to end it. They came to remind it.",
         new String[][]{
             {"Category", "Main"},
             {"Difficulty", "A"},
-            {"Clear Condition", "Stand the Warden down. Fight with what you carried."},
+            {"Objective", "Stabilize the core. Restore authorization. Work together."},
             {"Time Limit", "None"},
-            {"Compensation", "???"},
+            {"Equipment", "Use what the last team left behind."},
             {"Failure", "Both operators fall."}
         }),
 
-    // Shown when the Warden is defeated. Level 3 isn't built yet, so nothing starts it so far
-    ENDING("MAIN SCENARIO CLEARED — A LIGHT BEHAVES AGAIN",
-        "The core steadies. The Warden stands down, its directive finally, quietly, fulfilled. Above, the grid "
-            + "accepts a clean signal it has waited a generation for — and a new fable begins, of two who did "
-            + "not rush, and so did not fail.",
+    ENDING("THE FABLE ENDS, AS THESE DO\nA LIGHT BEHAVES AGAIN",
+        "The core steadies. The Warden stands down, its directive finally, quietly, fulfilled. Above, "
+            + "the grid accepts a clean signal it has waited a generation for — and a new fable begins, "
+            + "of two who did not rush, and so did not fail.",
         new String[][]{
             {"Result", "Cleared"},
             {"Containment", "Restored"},

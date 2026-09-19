@@ -6,6 +6,7 @@ public enum WardenActionType {
 
     DEPLOY_DRONE("deploys a defense drone"),
     ACTIVATE_TURRET("brings a security turret online"),
+    RAISE_CONTAINMENT_BARRIERS("raises containment barriers"),
     DEFENSIVE_SCAN("runs a defensive scan, recalibrating"),
     INCREASE_CONTAINMENT_WARNING("raises the containment warning");
 

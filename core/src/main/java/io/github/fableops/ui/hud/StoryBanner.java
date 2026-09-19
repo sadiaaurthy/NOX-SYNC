@@ -57,6 +57,8 @@ public class StoryBanner {
 
     public boolean isOpen() { return open; }
 
+    public void close() { open = false; }
+
     public void update(float delta) {
         if (!open) return;
         timer -= delta;

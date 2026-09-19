@@ -5,7 +5,7 @@ package io.github.fableops.level3;
 // what each phase actually does and drives the transitions
 public class TurnManager {
 
-    public enum Phase { PLAYER_TURN, WARDEN_TURN, RESOLUTION }
+    public enum Phase { PLAYER_TURN, RESOLUTION, WARDEN_TURN }
 
     private Phase phase = Phase.PLAYER_TURN;
     private PlayerActionType p1Action;
@@ -33,7 +33,7 @@ public class TurnManager {
 
     public PlayerActionType getP2Action() { return p2Action; }
 
-    // Moves to a display phase (WARDEN_TURN or RESOLUTION) that holds for displayDelay seconds
+    // Moves to a display phase that holds for displayDelay seconds.
     public void advanceTo(Phase next, float displayDelay) {
         phase = next;
         timer = displayDelay;

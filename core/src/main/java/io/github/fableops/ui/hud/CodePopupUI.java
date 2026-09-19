@@ -52,6 +52,9 @@ public class CodePopupUI {
     private String currentInput = "";
     private int playerSide = 1; // 1 = left half, 2 = right half
     private SubmitListener listener;
+    private String readOnlyEyebrow;
+    private String readOnlyTitle;
+    private List<String> readOnlyLines;
     // Only false in debug, when the other popup has the keyboard
     private boolean focused = true;
 
@@ -66,9 +69,21 @@ public class CodePopupUI {
 
     public void open(CodeFragmentPayload payload, int playerSide) {
         this.payload = payload;
+        this.readOnlyLines = null;
         this.playerSide = playerSide;
         this.selectedIndex = 0;
         this.currentInput = "";
+        this.open = true;
+    }
+
+    // Reuses the established terminal presentation for found logs without adding another popup
+    // system. Read-only entries close with E, ENTER, or ESC and never expose puzzle inputs.
+    public void openReadOnly(String eyebrow, String title, List<String> lines, int playerSide) {
+        this.payload = null;
+        this.readOnlyEyebrow = eyebrow;
+        this.readOnlyTitle = title;
+        this.readOnlyLines = lines;
+        this.playerSide = playerSide;
         this.open = true;
     }
 
@@ -85,7 +100,17 @@ public class CodePopupUI {
     }
 
     public void handleInput() {
-        if (!open || payload == null) return;
+        if (!open) return;
+
+        if (readOnlyLines != null) {
+            if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)
+                || Gdx.input.isKeyJustPressed(Input.Keys.ENTER)
+                || Gdx.input.isKeyJustPressed(Input.Keys.E)) {
+                close();
+            }
+            return;
+        }
+        if (payload == null) return;
 
         // Checked first, the Stage 2 legend player has no positions but still needs ESC
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
@@ -114,7 +139,7 @@ public class CodePopupUI {
     }
 
     public void render(ShapeRenderer shape, SpriteBatch batch, float uiWorldW, float uiWorldH) {
-        if (!open || payload == null) return;
+        if (!open || (payload == null && readOnlyLines == null)) return;
 
         float halfW = uiWorldW / 2f;
         float panelW = halfW * WIDTH_FRACTION;
@@ -130,6 +155,24 @@ public class CodePopupUI {
         float lineY = panelY + panelH - PADDING;
 
         batch.begin();
+        if (readOnlyLines != null) {
+            font.setColor(COLOR_MAGENTA);
+            lineY -= drawWrapped(batch, readOnlyEyebrow, textX, lineY, contentW, EYEBROW_SCALE)
+                + GAP_AFTER_EYEBROW;
+            font.setColor(COLOR_ORANGE);
+            lineY -= drawWrapped(batch, readOnlyTitle, textX, lineY, contentW, TITLE_SCALE)
+                + GAP_AFTER_TITLE;
+            font.setColor(COLOR_CYAN);
+            for (String line : readOnlyLines) {
+                lineY -= drawWrapped(batch, line, textX, lineY, contentW, BODY_SCALE) + GAP_BETWEEN_LINES;
+            }
+            font.setColor(COLOR_DIM);
+            drawWrapped(batch, "E / ENTER / ESC close", textX, panelY + PADDING + FOOTER_INSET,
+                contentW, BODY_SCALE);
+            batch.end();
+            return;
+        }
+
         font.setColor(COLOR_MAGENTA);
         lineY -= drawWrapped(batch, "// REACTOR TERMINAL", textX, lineY, contentW, EYEBROW_SCALE) + GAP_AFTER_EYEBROW;
 

@@ -7,17 +7,17 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 
 // The Warden itself: sprite, animation and narrative/meter state. "Spider Warden.png" is a clean
-// 9x4 grid whose four rows already are the four looks STORY.md asks for - row 0 idle/red (defense
+// 8x4 grid whose four rows already are the four looks STORY.md asks for - row 0 idle/red (defense
 // active), row 1 attack/red beam, row 2 damaged/cracked, row 3 restored/blue (stand down) - so no
 // directional logic is needed, just "which row for the current moment".
 //
-// Holds the narrative state and the two meters (Stability, and the dual-authorization meter that
-// only matters during DIRECTIVE_CONFLICT), but never decides how they change - Level3Controller
+// Holds the narrative state and the three encounter meters, but never decides how they change -
+// Level3Controller
 // (host-authoritative) does that and calls the setters here; the client sets the same fields
 // straight from Level3TurnStateMessage. Either way this class only turns state into a picture
 public class WardenController {
 
-    private static final int COLUMNS = 9;
+    private static final int COLUMNS = 8;
     private static final int ROWS = 4;
     private static final int ROW_IDLE = 0;
     private static final int ROW_ATTACK = 1;
@@ -26,7 +26,9 @@ public class WardenController {
     private static final float FRAME_DURATION = 0.09f;
     private static final float FLASH_DURATION = COLUMNS * FRAME_DURATION;
 
-    public static final float DRAW_SIZE = 460f;
+    // Players render at 100 world units tall. This keeps the Warden imposing without making it
+    // tower over the encounter at more than four player heights.
+    public static final float DRAW_SIZE = 185f;
 
     private final Texture texture;
     private final Animation<TextureRegion>[] rows;
@@ -34,6 +36,7 @@ public class WardenController {
 
     private WardenState state = WardenState.DEFENSE_ACTIVE;
     private float stability = 0f;   // 0..100
+    private float directiveConflict = 100f; // 100 = directives fully opposed; trends down
     private float dualMeter = 0f;   // 0..100, only meaningful during DIRECTIVE_CONFLICT
 
     private float animTime = 0f;
@@ -45,13 +48,15 @@ public class WardenController {
         this.anchorX = anchorX;
         this.anchorY = anchorY;
         texture = new Texture(Gdx.files.internal("Spider Warden.png"));
-        int frameW = texture.getWidth() / COLUMNS;
-        int frameH = texture.getHeight() / ROWS;
         rows = new Animation[ROWS];
         for (int row = 0; row < ROWS; row++) {
             TextureRegion[] frames = new TextureRegion[COLUMNS];
             for (int col = 0; col < COLUMNS; col++) {
-                frames[col] = new TextureRegion(texture, col * frameW, row * frameH, frameW, frameH);
+                int x0 = col * texture.getWidth() / COLUMNS;
+                int x1 = (col + 1) * texture.getWidth() / COLUMNS;
+                int y0 = row * texture.getHeight() / ROWS;
+                int y1 = (row + 1) * texture.getHeight() / ROWS;
+                frames[col] = new TextureRegion(texture, x0, y0, x1 - x0, y1 - y0);
             }
             rows[row] = new Animation<>(FRAME_DURATION, frames);
         }
@@ -64,6 +69,12 @@ public class WardenController {
     public float getStability() { return stability; }
 
     public void setStability(float stability) { this.stability = Math.max(0f, Math.min(100f, stability)); }
+
+    public float getDirectiveConflict() { return directiveConflict; }
+
+    public void setDirectiveConflict(float directiveConflict) {
+        this.directiveConflict = Math.max(0f, Math.min(100f, directiveConflict));
+    }
 
     public float getDualMeter() { return dualMeter; }
 
@@ -113,6 +124,16 @@ public class WardenController {
     public float centreX() { return anchorX; }
 
     public float centreY() { return anchorY + DRAW_SIZE / 2f; }
+
+    public void reset() {
+        state = WardenState.DEFENSE_ACTIVE;
+        stability = 0f;
+        directiveConflict = 100f;
+        dualMeter = 0f;
+        animTime = 0f;
+        attackFlashTimer = 0f;
+        damagedFlashTimer = 0f;
+    }
 
     public void dispose() {
         texture.dispose();

@@ -46,6 +46,14 @@ public class Level3Map implements Collidable {
     private static final float OVERHANG_PX_X = 878f;
     private static final float OVERHANG_PX_Y = 79f;
 
+    // Candidate lanes are arranged around the Warden, but their Y coordinates are never used
+    // directly. Each X is projected down onto the first collision-validated walkable floor point.
+    private static final float[] TURRET_LATERAL_OFFSETS = {
+        -530f, -370f, -210f, 210f, 370f, 530f
+    };
+    private static final float TURRET_BASE_WIDTH = 54f;
+    private static final float TURRET_BASE_DEPTH = 18f;
+
     private final Texture background;
     private final Texture overhang;
     private final CollisionMask mask;
@@ -137,12 +145,37 @@ public class Level3Map implements Collidable {
 
     public float[] getDroneAnchor() {
         float[] warden = getWardenAnchor();
-        return new float[]{warden[0] - 260f, warden[1] - 40f};
+        // Orbit centre: around the Warden's body, not down on the turret floor.
+        return new float[]{warden[0], warden[1] + 72f};
     }
 
-    public float[] getTurretAnchor() {
+    public float[][] getTurretGroundPoints() {
         float[] warden = getWardenAnchor();
-        return new float[]{warden[0] + 260f, warden[1] - 40f};
+        float[][] points = new float[TURRET_LATERAL_OFFSETS.length][2];
+
+        // bossZone.y uses exactly the same bottom/feet coordinate as Player.y. Search toward the
+        // foreground from that line until the complete turret base fits on a walkable mask area.
+        // This keeps the predefined formation near the Warden without inventing a visual floor Y.
+        int maxDrop = Math.max(1, (int) Math.ceil(warden[1] - bossZone.y));
+        for (int i = 0; i < TURRET_LATERAL_OFFSETS.length; i++) {
+            float x = warden[0] + TURRET_LATERAL_OFFSETS[i];
+            float groundY = Float.NaN;
+            for (int drop = 0; drop <= maxDrop; drop++) {
+                float candidateY = bossZone.y - drop;
+                if (!mask.blocksBox(x - TURRET_BASE_WIDTH / 2f, candidateY,
+                    TURRET_BASE_WIDTH, TURRET_BASE_DEPTH, WALKABLE)) {
+                    groundY = candidateY;
+                    break;
+                }
+            }
+            if (Float.isNaN(groundY)) {
+                throw new IllegalStateException("No walkable ground for Security Turret anchor "
+                    + i + " near the Warden. Check Level3Mapcollision.png.");
+            }
+            points[i][0] = x;
+            points[i][1] = groundY;
+        }
+        return points;
     }
 
     public float[] getCoreAnchor() {
