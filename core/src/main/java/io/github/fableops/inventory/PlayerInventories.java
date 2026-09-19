@@ -50,6 +50,11 @@ public class PlayerInventories {
         return uiP1.isOpen() || uiP2.isOpen();
     }
 
+    public void closeAll() {
+        uiP1.close();
+        uiP2.close();
+    }
+
     // blocked means a terminal popup is using the keyboard
     // The open key is only checked here, isKeyJustPressed stays true for the whole frame
     public void handleInput(boolean localIsP1, boolean localIsP2, boolean blocked,

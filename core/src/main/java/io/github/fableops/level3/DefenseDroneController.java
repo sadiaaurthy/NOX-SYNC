@@ -28,6 +28,8 @@ public class DefenseDroneController {
     private static final float TAU = (float) (Math.PI * 2.0);
     private static final long FORMATION_SEED = 0x4D4552494449414EL;
 
+    private enum UnitState { INACTIVE, ACTIVE, DESTROYING }
+
     private static final class Unit {
         float x;
         float y;
@@ -38,9 +40,7 @@ public class DefenseDroneController {
         float orbitSpeed;
         float bobPhase;
         float bobSpeed;
-        boolean active;
-        boolean destroying;
-        boolean disabled;
+        UnitState state = UnitState.INACTIVE;
         float animTime;
         float attackTimer;
         float damagedTimer;
@@ -80,7 +80,7 @@ public class DefenseDroneController {
 
     public int getActiveCount() {
         int count = 0;
-        for (Unit unit : units) if (unit.active) count++;
+        for (Unit unit : units) if (unit.state == UnitState.ACTIVE) count++;
         return count;
     }
 
@@ -104,14 +104,12 @@ public class DefenseDroneController {
         for (int i = 0; i < units.length; i++) {
             Unit unit = units[i];
             boolean shouldBeActive = i < count;
-            if (shouldBeActive && !unit.active) {
+            if (shouldBeActive && unit.state != UnitState.ACTIVE) {
                 unit.health = MAX_HEALTH;
                 unit.animTime = 0f;
-                unit.disabled = false;
                 position(unit);
             }
-            unit.active = shouldBeActive;
-            if (shouldBeActive) unit.destroying = false;
+            unit.state = shouldBeActive ? UnitState.ACTIVE : UnitState.INACTIVE;
         }
     }
 
@@ -146,21 +144,20 @@ public class DefenseDroneController {
         Unit unit = units[index];
         unit.health = Math.max(0f, unit.health - amount);
         unit.damagedTimer = FLASH_DURATION;
-        if (unit.health <= 0f) disable(unit);
+        if (unit.health <= 0f) beginDestruction(unit);
         return index;
     }
 
     public void playDamaged(int index, boolean destroyed) {
         if (index < 0 || index >= units.length) return;
         Unit unit = units[index];
+        if (!destroyed && unit.state != UnitState.ACTIVE) return;
         unit.damagedTimer = FLASH_DURATION;
-        if (destroyed) disable(unit);
+        if (destroyed) beginDestruction(unit);
     }
 
-    private static void disable(Unit unit) {
-        unit.active = false;
-        unit.destroying = true;
-        unit.disabled = true;
+    private static void beginDestruction(Unit unit) {
+        unit.state = UnitState.DESTROYING;
         unit.attackTimer = 0f;
     }
 
@@ -173,15 +170,17 @@ public class DefenseDroneController {
 
     public void update(float delta) {
         for (Unit unit : units) {
-            if (!unit.active && !unit.destroying && !unit.disabled) continue;
-            if (unit.active) {
+            if (unit.state == UnitState.INACTIVE) continue;
+            if (unit.state == UnitState.ACTIVE) {
                 unit.orbitAngle = wrap(unit.orbitAngle + unit.orbitSpeed * delta);
                 position(unit);
             }
             unit.animTime += delta;
             unit.attackTimer = Math.max(0f, unit.attackTimer - delta);
             unit.damagedTimer = Math.max(0f, unit.damagedTimer - delta);
-            if (unit.destroying && unit.damagedTimer <= 0f) unit.destroying = false;
+            if (unit.state == UnitState.DESTROYING && unit.damagedTimer <= 0f) {
+                unit.state = UnitState.INACTIVE;
+            }
         }
     }
 
@@ -199,14 +198,13 @@ public class DefenseDroneController {
 
     public void draw(SpriteBatch batch) {
         for (Unit unit : units) {
-            if (!unit.active && !unit.destroying && !unit.disabled) continue;
+            if (unit.state == UnitState.INACTIVE) continue;
             int row;
             float time;
             boolean loop;
-            if (unit.damagedTimer > 0f || unit.disabled) {
+            if (unit.damagedTimer > 0f || unit.state == UnitState.DESTROYING) {
                 row = ROW_DAMAGED;
-                time = unit.disabled && unit.damagedTimer <= 0f
-                    ? FLASH_DURATION : FLASH_DURATION - unit.damagedTimer;
+                time = FLASH_DURATION - unit.damagedTimer;
                 loop = false;
             } else if (unit.attackTimer > 0f) {
                 row = ROW_ATTACK;
@@ -228,12 +226,16 @@ public class DefenseDroneController {
     }
 
     private int firstActiveIndex() {
-        for (int i = 0; i < units.length; i++) if (units[i].active) return i;
+        for (int i = 0; i < units.length; i++) {
+            if (units[i].state == UnitState.ACTIVE) return i;
+        }
         return -1;
     }
 
     private int lastActiveIndex() {
-        for (int i = units.length - 1; i >= 0; i--) if (units[i].active) return i;
+        for (int i = units.length - 1; i >= 0; i--) {
+            if (units[i].state == UnitState.ACTIVE) return i;
+        }
         return -1;
     }
 
@@ -243,9 +245,7 @@ public class DefenseDroneController {
         formationCount = 0;
         for (Unit unit : units) {
             unit.health = 0f;
-            unit.active = false;
-            unit.destroying = false;
-            unit.disabled = false;
+            unit.state = UnitState.INACTIVE;
             unit.animTime = 0f;
             unit.attackTimer = 0f;
             unit.damagedTimer = 0f;

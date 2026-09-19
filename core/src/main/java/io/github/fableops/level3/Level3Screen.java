@@ -16,6 +16,7 @@ import io.github.fableops.EnemySprites;
 import io.github.fableops.Player;
 import io.github.fableops.Role;
 import io.github.fableops.SwarmController;
+import io.github.fableops.inventory.Inventory;
 import io.github.fableops.inventory.PlayerInventories;
 import io.github.fableops.level2.Gun;
 import io.github.fableops.level2.loot.LootField;
@@ -36,6 +37,7 @@ import io.github.fableops.story.StoryGate;
 import io.github.fableops.ui.SplitScreen;
 import io.github.fableops.ui.UiViewport;
 import io.github.fableops.ui.hud.CodePopupUI;
+import io.github.fableops.ui.hud.EquipmentSelectionPanel;
 import io.github.fableops.ui.hud.Hud;
 import io.github.fableops.ui.hud.StoryBanner;
 import io.github.fableops.ui.hud.TurnPanel;
@@ -93,6 +95,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private final DefenseDroneController droneVisual;
     private final SecurityTurretController turretVisual;
     private final TurnPanel turnPanel;
+    private final EquipmentSelectionPanel equipmentPanel;
     private final StoryBanner storyBanner;
     private final CodePopupUI logPopup;
 
@@ -109,6 +112,10 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private int p1Selected;
     private int p2Selected;
     private int activeMenuSide;
+    private boolean equipmentOpen;
+    private int equipmentSide;
+    private int equipmentSelectedSlot = -1;
+    private PlayerActionType equipmentAction;
     private int shownBannerSeq;
     private InputState inputState = InputState.PLAYER_FREE_CONTROL;
     private float freeControlTimer;
@@ -161,6 +168,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         this.carriedLootAssets = carriedLootAssets;
         this.activeMenuSide = sideOneRole == Role.BREAKER ? 1 : 2;
         this.turnPanel = new TurnPanel(hud.font());
+        this.equipmentPanel = new EquipmentSelectionPanel(hud.font());
         this.storyBanner = new StoryBanner(hud.font());
         this.logPopup = new CodePopupUI(hud.font());
 
@@ -292,7 +300,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         boolean overlayWasOpen = storyBanner.isOpen() || logPopup.isOpen();
         storyBanner.handleInput();
         logPopup.handleInput();
-        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !inventories.anyOpen() && !overlayWasOpen) {
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !equipmentOpen
+            && !inventories.anyOpen() && !overlayWasOpen) {
             Gdx.app.exit();
             return;
         }
@@ -340,6 +349,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
 
     private void beginEncounter() {
         bossStarted = true;
+        inventories.closeAll();
+        closeEquipmentSelection();
         activeMenuSide = breakerSide();
         inputState = InputState.TURN_SELECTION;
         freeControlTimer = 0f;
@@ -450,6 +461,10 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private void handleTurnInput() {
         if (inputState != InputState.TURN_SELECTION
             || phase() != TurnManager.Phase.PLAYER_TURN) return;
+        if (equipmentOpen) {
+            handleEquipmentInput();
+            return;
+        }
         if (soloControl()) {
             handleUnifiedSelection();
         } else if (isHost) {
@@ -466,12 +481,15 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             observedPhase = current;
             switch (current) {
                 case RESOLUTION:
+                    closeEquipmentSelection();
                     inputState = InputState.ACTION_EXECUTION;
                     break;
                 case WARDEN_TURN:
+                    closeEquipmentSelection();
                     inputState = InputState.WARDEN_TURN;
                     break;
                 case PLAYER_TURN:
+                    closeEquipmentSelection();
                     activeMenuSide = breakerSide();
                     if (previous == TurnManager.Phase.WARDEN_TURN) {
                         inputState = InputState.PLAYER_FREE_CONTROL;
@@ -527,9 +545,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         PlayerActionType[] confirmedOptions = actionsFor(confirmedSide);
         int confirmedSelected = confirmedSide == 1 ? p1Selected : p2Selected;
         confirmedSelected = Math.max(0, Math.min(confirmedOptions.length - 1, confirmedSelected));
-        controller.confirmLocal(confirmedSide, confirmedOptions[confirmedSelected]);
-        int nextSide = confirmedSide == 1 ? 2 : 1;
-        if (!confirmed(nextSide)) activeMenuSide = nextSide;
+        beginActionConfirmation(confirmedSide, confirmedOptions[confirmedSelected]);
     }
 
     private void handleSelection(int side, int upKey, int downKey, int confirmKey) {
@@ -549,8 +565,67 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             || Gdx.input.isButtonJustPressed(role == Role.BREAKER ? Input.Buttons.LEFT : Input.Buttons.RIGHT);
         if (!confirm) return;
         PlayerActionType action = options[selected];
-        if (controller != null) controller.confirmLocal(side, action);
-        else clientSession.send(new Level3ActionMessage(action.ordinal()));
+        beginActionConfirmation(side, action);
+    }
+
+    private void beginActionConfirmation(int side, PlayerActionType action) {
+        if (Level3Controller.requiresEquipment(action)) {
+            int firstSlot = Level3Controller.firstCompatibleSlot(inventories, side, action);
+            if (firstSlot < 0) return;
+            equipmentOpen = true;
+            equipmentSide = side;
+            equipmentAction = action;
+            equipmentSelectedSlot = firstSlot;
+            inventories.closeAll();
+            return;
+        }
+        confirmAction(side, action, -1);
+    }
+
+    private void handleEquipmentInput() {
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+            closeEquipmentSelection();
+            return;
+        }
+        boolean up = Gdx.input.isKeyJustPressed(Input.Keys.W)
+            || Gdx.input.isKeyJustPressed(Input.Keys.UP);
+        boolean down = Gdx.input.isKeyJustPressed(Input.Keys.S)
+            || Gdx.input.isKeyJustPressed(Input.Keys.DOWN);
+        if (up) equipmentSelectedSlot = nextCompatibleSlot(-1);
+        if (down) equipmentSelectedSlot = nextCompatibleSlot(1);
+
+        if (!Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) return;
+        int side = equipmentSide;
+        int slot = equipmentSelectedSlot;
+        PlayerActionType action = equipmentAction;
+        closeEquipmentSelection();
+        confirmAction(side, action, slot);
+    }
+
+    private int nextCompatibleSlot(int direction) {
+        Inventory inventory = inventories.forPlayer(equipmentSide);
+        int slot = equipmentSelectedSlot;
+        for (int i = 0; i < Inventory.CAPACITY; i++) {
+            slot = (slot + direction + Inventory.CAPACITY) % Inventory.CAPACITY;
+            if (Level3Controller.itemSupportsAction(equipmentAction, inventory.get(slot))) return slot;
+        }
+        return equipmentSelectedSlot;
+    }
+
+    private void confirmAction(int side, PlayerActionType action, int inventorySlot) {
+        if (controller != null) controller.confirmLocal(side, action, inventorySlot);
+        else clientSession.send(new Level3ActionMessage(action.ordinal(), inventorySlot));
+
+        if (!soloControl()) return;
+        int nextSide = side == 1 ? 2 : 1;
+        if (!confirmed(nextSide)) activeMenuSide = nextSide;
+    }
+
+    private void closeEquipmentSelection() {
+        equipmentOpen = false;
+        equipmentSide = 0;
+        equipmentSelectedSlot = -1;
+        equipmentAction = null;
     }
 
     private boolean confirmed(int side) {
@@ -612,6 +687,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         failureCause = StoryGate.fallen(breakerDown, listenerDown);
         failureScenePending = true;
         failureSceneTimer = FAILURE_SCENE_DELAY;
+        closeEquipmentSelection();
         storyBanner.close();
         logPopup.close();
     }
@@ -660,6 +736,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         remoteListenerLine = "";
         p1Selected = 0;
         p2Selected = 0;
+        closeEquipmentSelection();
         activeMenuSide = breakerSide();
         inputState = InputState.PLAYER_FREE_CONTROL;
         freeControlTimer = 0f;
@@ -731,12 +808,18 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         hud.drawPlayerCards(shape, batch, ui, player1, player2, sideOneRole);
         gun.drawHud(shape, batch, hud.font(), ui.width());
 
-        if (bossStarted && inputState == InputState.TURN_SELECTION) {
+        if (bossStarted && inputState == InputState.TURN_SELECTION && !equipmentOpen) {
             turnPanel.render(shape, batch, ui, phase(), wardenState(), stability(), directiveConflict(), dualMeter(),
                 sideOneRole,
                 sideOneRole.callSign(), sideOneRole.other().callSign(), p1Selected, p2Selected,
                 confirmed(1), confirmed(2), actionsFor(1), actionsFor(2), activeMenuSide, soloControl(),
                 wardenLine(), breakerLine(), listenerLine());
+        }
+        if (equipmentOpen) {
+            Role role = equipmentSide == 1 ? sideOneRole : sideOneRole.other();
+            equipmentPanel.render(shape, batch, ui, equipmentSide, role.name(), equipmentAction,
+                inventories.forPlayer(equipmentSide), equipmentSelectedSlot, gun,
+                equipmentSide == 1 ? SplitScreen.ACCENT_P1 : SplitScreen.ACCENT_P2);
         }
         inventories.render(shape, batch, ui.width(), ui.height(), player1, player2,
             SplitScreen.ACCENT_P1, SplitScreen.ACCENT_P2);

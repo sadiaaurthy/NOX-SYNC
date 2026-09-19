@@ -69,6 +69,12 @@ public class Gun {
 
     public int getOwner() { return owner; }
 
+    public int getMagazineRounds() { return magazine; }
+
+    public int getSpareRounds() { return spare; }
+
+    public int getTotalRounds() { return magazine + spare; }
+
     public void giveTo(int playerId) { owner = playerId; }
 
     public void addSpare(int rounds) {

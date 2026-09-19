@@ -1,5 +1,8 @@
 {
     "java.configuration.updateBuildConfiguration": "interactive",
     "java.debug.settings.onBuildFailureProceed": true,
-    "editor.foldingImportsByDefault": true
+    "editor.foldingImportsByDefault": true,
+    "git.ignoredRepositories": [
+        "C:\\Users\\Sadia Aurthy"
+    ]
 }

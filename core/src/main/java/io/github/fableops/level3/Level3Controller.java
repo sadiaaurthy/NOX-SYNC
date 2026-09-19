@@ -70,6 +70,8 @@ public class Level3Controller {
     private int turretDamagedIndex = -1;
     private int p1ConsumedSlot = -1;
     private int p2ConsumedSlot = -1;
+    private int p1SelectedItemSlot = -1;
+    private int p2SelectedItemSlot = -1;
 
     public Level3Controller(HostSession hostSession, Level3Map world, PlayerInventories inventories,
                             Gun gun, Player player1, Player player2, Role sideOneRole) {
@@ -131,13 +133,44 @@ public class Level3Controller {
         return false;
     }
 
+    public static boolean requiresEquipment(PlayerActionType action) {
+        return action == PlayerActionType.BREAKER_WEAPON_ATTACK
+            || action == PlayerActionType.BREAKER_SHIELD_DEFENSE
+            || action == PlayerActionType.USE_MEDKIT;
+    }
+
+    public static boolean itemSupportsAction(PlayerActionType action, InventoryItem item) {
+        if (item == null) return false;
+        switch (action) {
+            case BREAKER_WEAPON_ATTACK:
+                return "Sidearm".equalsIgnoreCase(item.getName());
+            case BREAKER_SHIELD_DEFENSE:
+                return isShieldItem(item);
+            case USE_MEDKIT:
+                return item.isConsumable();
+            default:
+                return false;
+        }
+    }
+
+    public static int firstCompatibleSlot(PlayerInventories inventories, int side,
+                                          PlayerActionType action) {
+        Inventory inv = inventories.forPlayer(side);
+        for (int i = 0; i < Inventory.CAPACITY; i++) {
+            if (itemSupportsAction(action, inv.get(i))) return i;
+        }
+        return -1;
+    }
+
     public static PlayerActionType[] availableActions(PlayerInventories inventories, Gun gun,
                                                        int side, Role role) {
         List<PlayerActionType> actions = new ArrayList<>();
         if (role == Role.BREAKER) {
             actions.add(PlayerActionType.BREAKER_PHYSICAL_STRIKE);
             if (hasSidearm(inventories, gun, side)) actions.add(PlayerActionType.BREAKER_WEAPON_ATTACK);
+            actions.add(PlayerActionType.BREAKER_DISABLE_DRONE);
             actions.add(PlayerActionType.BREAKER_REPAIR_MECHANISM);
+            actions.add(PlayerActionType.BREAKER_PROTECT_LISTENER);
             if (hasShield(inventories, side)) actions.add(PlayerActionType.BREAKER_SHIELD_DEFENSE);
         } else {
             actions.add(PlayerActionType.LISTENER_SCAN_WARDEN);
@@ -158,7 +191,7 @@ public class Level3Controller {
                 int ordinal = msg.getActionOrdinal();
                 PlayerActionType[] actions = PlayerActionType.values();
                 if (ordinal < 0 || ordinal >= actions.length) return;
-                Gdx.app.postRunnable(() -> confirmLocal(2, actions[ordinal]));
+                Gdx.app.postRunnable(() -> confirmLocal(2, actions[ordinal], msg.getInventorySlot()));
             } catch (RuntimeException ignored) {
                 // Malformed event-channel input must not take down the render thread.
             }
@@ -166,6 +199,10 @@ public class Level3Controller {
     }
 
     public void confirmLocal(int side, PlayerActionType action) {
+        confirmLocal(side, action, -1);
+    }
+
+    public void confirmLocal(int side, PlayerActionType action, int inventorySlot) {
         if (turnManager.getPhase() != TurnManager.Phase.PLAYER_TURN || action == null) return;
         Role role = roleForSide(side);
         if (action == PlayerActionType.USE_ITEM) {
@@ -173,11 +210,22 @@ public class Level3Controller {
         } else if (!Arrays.asList(availableActions(inventories, gun, side, role)).contains(action)) {
             return;
         }
+        if (requiresEquipment(action)) {
+            InventoryItem selected = inventories.forPlayer(side).get(inventorySlot);
+            if (!itemSupportsAction(action, selected)) return;
+        } else {
+            inventorySlot = -1;
+        }
 
         boolean confirmed = side == 1 ? turnManager.p1Confirmed() : turnManager.p2Confirmed();
         if (confirmed) return;
-        if (side == 1) turnManager.confirmP1(action);
-        else if (side == 2) turnManager.confirmP2(action);
+        if (side == 1) {
+            p1SelectedItemSlot = inventorySlot;
+            turnManager.confirmP1(action);
+        } else if (side == 2) {
+            p2SelectedItemSlot = inventorySlot;
+            turnManager.confirmP2(action);
+        }
         else return;
         broadcast();
     }
@@ -224,6 +272,8 @@ public class Level3Controller {
             case WARDEN_TURN:
                 if (turnManager.tick(delta)) {
                     turnManager.resetForNextRound();
+                    p1SelectedItemSlot = -1;
+                    p2SelectedItemSlot = -1;
                     broadcast();
                 }
                 break;
@@ -253,8 +303,10 @@ public class Level3Controller {
         PlayerActionType listenerAction = p1IsBreaker ? turnManager.getP2Action() : turnManager.getP1Action();
 
         breakerSupported = listenerAction == PlayerActionType.LISTENER_SUPPORT_BREAKER;
-        breakerLine = resolvePlayerAction(breakerAction, breaker);
-        listenerLine = resolvePlayerAction(listenerAction, listener);
+        int breakerSlot = p1IsBreaker ? p1SelectedItemSlot : p2SelectedItemSlot;
+        int listenerSlot = p1IsBreaker ? p2SelectedItemSlot : p1SelectedItemSlot;
+        breakerLine = resolvePlayerAction(breakerAction, breaker, breakerSlot);
+        listenerLine = resolvePlayerAction(listenerAction, listener, listenerSlot);
         advanceStateIfNeeded();
 
         boolean coordinated = warden.getState() == WardenState.DIRECTIVE_CONFLICT
@@ -286,7 +338,7 @@ public class Level3Controller {
         }
     }
 
-    private String resolvePlayerAction(PlayerActionType action, Player self) {
+    private String resolvePlayerAction(PlayerActionType action, Player self, int inventorySlot) {
         if (action == null) return "";
         String name = callSignOf(self);
         switch (action) {
@@ -303,7 +355,9 @@ public class Level3Controller {
             }
             case BREAKER_WEAPON_ATTACK: {
                 self.startAttack();
-                if (!hasSidearm(inventories, gun, self == player1 ? 1 : 2)
+                int side = self == player1 ? 1 : 2;
+                InventoryItem selected = inventories.forPlayer(side).get(inventorySlot);
+                if (!itemSupportsAction(action, selected) || !hasSidearm(inventories, gun, side)
                     || !gun.useTurnBasedRound()) {
                     return name + " finds the recovered sidearm empty.";
                 }
@@ -337,7 +391,7 @@ public class Level3Controller {
                 return name + " " + action.flavorVerb() + ".";
             case BREAKER_SHIELD_DEFENSE:
                 self.startAttack();
-                return useShield(self);
+                return useShield(self, inventorySlot);
             case LISTENER_SCAN_WARDEN:
                 self.startAttack();
                 addProgress(7f, 6f);
@@ -360,6 +414,8 @@ public class Level3Controller {
                 addProgress(4f, 4f);
                 return name + " " + action.flavorVerb() + ".";
             case USE_MEDKIT:
+                self.startAttack();
+                return useMedkit(self, inventorySlot);
             case USE_ITEM:
                 return useItem(self);
             default:
@@ -413,6 +469,20 @@ public class Level3Controller {
         return useShield(self);
     }
 
+    private String useMedkit(Player self, int slot) {
+        int side = self == player1 ? 1 : 2;
+        Inventory inv = inventories.forPlayer(side);
+        InventoryItem item = inv.get(slot);
+        String name = callSignOf(self);
+        if (!itemSupportsAction(PlayerActionType.USE_MEDKIT, item)) {
+            return name + " has no selected medical supplies.";
+        }
+        self.heal(item.getHealAmount());
+        inv.remove(slot);
+        recordConsumedSlot(side, slot);
+        return name + " uses the " + item.getName() + " and restores health.";
+    }
+
     private String useShield(Player self) {
         int side = self == player1 ? 1 : 2;
         Inventory inv = inventories.forPlayer(side);
@@ -428,6 +498,21 @@ public class Level3Controller {
             }
         }
         return name + " has no usable gear.";
+    }
+
+    private String useShield(Player self, int slot) {
+        int side = self == player1 ? 1 : 2;
+        Inventory inv = inventories.forPlayer(side);
+        InventoryItem item = inv.get(slot);
+        String name = callSignOf(self);
+        if (!itemSupportsAction(PlayerActionType.BREAKER_SHIELD_DEFENSE, item)) {
+            return name + " has no selected shield equipment.";
+        }
+        inv.remove(slot);
+        recordConsumedSlot(side, slot);
+        if (side == 1) p1Braced = true;
+        else p2Braced = true;
+        return name + " braces with the " + item.getName() + ".";
     }
 
     private static boolean hasNamedItem(PlayerInventories inventories, int side, String name) {
@@ -589,6 +674,8 @@ public class Level3Controller {
         turretDamagedIndex = -1;
         p1ConsumedSlot = -1;
         p2ConsumedSlot = -1;
+        p1SelectedItemSlot = -1;
+        p2SelectedItemSlot = -1;
         broadcast();
     }
 
