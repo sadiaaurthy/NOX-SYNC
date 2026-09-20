@@ -66,7 +66,7 @@ public final class ReactionPanel {
         font.draw(batch, attackerName + " TARGETING " + targetName, x + PAD,
             y + PANEL_H - 48f, PANEL_W - PAD * 2f, Align.center, false);
 
-        String[] keys = {"ENTER", "A", "H", "M"};
+        String[] keys = {"ENTER", "X", "H", "M"};
         ReactionType[] types = ReactionType.values();
         for (int i = 0; i < types.length; i++) {
             float rowY = y + 49f + (types.length - 1 - i) * ROW_H;
@@ -100,39 +100,12 @@ public final class ReactionPanel {
             width, playerSide == 1 ? Align.left : Align.right, false);
 
         StringBuilder hints = new StringBuilder();
-        appendHint(hints, available[ReactionType.SIDEARM.ordinal()], "[A] FIRE SIDE ARM");
+        appendHint(hints, available[ReactionType.SIDEARM.ordinal()], "[X] FIRE SIDE ARM");
         appendHint(hints, available[ReactionType.SHIELD.ordinal()], "[H] ACTIVATE SHIELD");
         appendHint(hints, available[ReactionType.MEDKIT.ordinal()], "[M] USE MEDKIT");
-        if (hints.length() == 0) hints.append("[ENTER] TAKE HIT");
-
         font.getData().setScale(0.76f);
         font.draw(batch, hints, x, y + 48f, width,
             playerSide == 1 ? Align.left : Align.right, true);
-        batch.end();
-    }
-
-    public void renderTurnMenuPrompt(SpriteBatch batch, UiViewport ui, int playerSide,
-                                     String playerName) {
-        renderPrompt(batch, ui, playerSide, playerName + ": PRESS T TO OPEN TURN MENU");
-    }
-
-    public void renderReactionMenuPrompt(SpriteBatch batch, UiViewport ui, int playerSide,
-                                         String playerName, boolean hasEquipment) {
-        String prompt = hasEquipment
-            ? playerName + ": PRESS T TO CHOOSE ACTION"
-            : playerName + ": NO EQUIPMENT - PRESS ENTER TO TAKE HIT";
-        renderPrompt(batch, ui, playerSide, prompt);
-    }
-
-    private void renderPrompt(SpriteBatch batch, UiViewport ui, int playerSide, String prompt) {
-        float halfW = ui.width() / 2f;
-        float x = playerSide == 1 ? EDGE_MARGIN : halfW + EDGE_MARGIN;
-        float width = halfW - EDGE_MARGIN * 2f;
-        batch.begin();
-        font.getData().setScale(0.82f);
-        font.setColor(CYAN);
-        font.draw(batch, prompt, x, 164f, width,
-            playerSide == 1 ? Align.left : Align.right, false);
         batch.end();
     }
 
@@ -141,15 +114,6 @@ public final class ReactionPanel {
         font.getData().setScale(1.55f);
         font.setColor(CYAN);
         font.draw(batch, instruction, 0f, ui.height() - 122f, ui.width(), Align.center, false);
-        batch.end();
-    }
-
-    public void renderTurnMenuHeader(SpriteBatch batch, UiViewport ui) {
-        batch.begin();
-        font.getData().setScale(1.45f);
-        font.setColor(CYAN);
-        font.draw(batch, "PRESS T TO OPEN TURN MENU", 0f, ui.height() - 118f,
-            ui.width(), Align.center, false);
         batch.end();
     }
 

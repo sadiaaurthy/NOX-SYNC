@@ -128,7 +128,7 @@ final class StoryWindow implements StoryGate.View {
             if (Gdx.app != null) Gdx.app.exit();
             return;
         }
-        if (code != KeyCode.ENTER || (beat == null && !failure)) return;
+        if (code != KeyCode.ENTER || beat == StoryBeat.ENDING || (beat == null && !failure)) return;
         if (controller.isTyping()) {
             controller.finishTyping();
         } else if (!confirmed && (!failure || onRestart != null)) {

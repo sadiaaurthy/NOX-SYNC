@@ -7,9 +7,11 @@ import javafx.animation.ScaleTransition;
 import javafx.animation.Timeline;
 import javafx.animation.TranslateTransition;
 import javafx.fxml.FXML;
+import javafx.geometry.Pos;
 import javafx.geometry.VPos;
 import javafx.scene.control.Label;
 import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.util.Duration;
@@ -22,6 +24,7 @@ public class StoryController {
 
     private static final String CURSOR = "▌";
     private static final String FAILED_STYLE = "failed";
+    private static final String ENDING_STYLE = "ending";
 
     @FXML private StackPane root;
     @FXML private Label narration;
@@ -32,6 +35,7 @@ public class StoryController {
     @FXML private GridPane rows;
     @FXML private Label prompt;
     @FXML private Label ready;
+    @FXML private HBox promptRow;
 
     private final Timeline typing = new Timeline(new KeyFrame(Duration.millis(22), e -> typeNext()));
     private final FadeTransition fadeIn = new FadeTransition(Duration.millis(220));
@@ -40,6 +44,7 @@ public class StoryController {
     private String text = "";
     private int typed;
     private boolean failure;
+    private boolean ending;
 
     @FXML
     private void initialize() {
@@ -60,8 +65,15 @@ public class StoryController {
 
     void show(StoryBeat beat) {
         failure = false;
+        ending = beat == StoryBeat.ENDING;
         root.getStyleClass().remove(FAILED_STYLE);
-        ready.setVisible(true);
+        if (ending) {
+            if (!root.getStyleClass().contains(ENDING_STYLE)) root.getStyleClass().add(ENDING_STYLE);
+        } else {
+            root.getStyleClass().remove(ENDING_STYLE);
+        }
+        ready.setVisible(!ending);
+        promptRow.setAlignment(ending ? Pos.CENTER : Pos.CENTER_RIGHT);
         fill(beat.getHeading(), beat.getNarration(), beat.getRows());
         setReady(0);
         setConfirmed(false);
@@ -70,6 +82,9 @@ public class StoryController {
     // canRestart is false on the client, which waits for the host
     void showFailure(String heading, String narration, String[][] rows, boolean canRestart) {
         failure = true;
+        ending = false;
+        root.getStyleClass().remove(ENDING_STYLE);
+        promptRow.setAlignment(Pos.CENTER_RIGHT);
         if (!root.getStyleClass().contains(FAILED_STYLE)) root.getStyleClass().add(FAILED_STYLE);
         ready.setVisible(false);
         fill(heading, narration, rows);
@@ -93,6 +108,8 @@ public class StoryController {
     void setConfirmed(boolean confirmed) {
         if (failure) {
             if (confirmed) prompt.setText("RESTARTING...");
+        } else if (ending) {
+            prompt.setText("Press ESC to Go Back to the Main Menu");
         } else {
             prompt.setText(confirmed ? "WAITING FOR YOUR PARTNER" : "[ENTER] CONFIRM");
         }

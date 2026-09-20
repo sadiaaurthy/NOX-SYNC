@@ -12,11 +12,22 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 
 // Stationary defenses select deterministic, collision-validated ground points. A turret's visible
 // base always draws on its assigned groundY; attack and damage animations never displace it.
+//
+// Each unit runs its own cycle:
+//   IDLE -> ALERTED -> WAITING_FOR_PLAYER_RESPONSE -> COMBAT_READY -> AIMING -> FIRING -> IDLE
+// A player inside TURRET_ATTACK_RANGE alerts the unit (warning only: no beam, no damage). The unit
+// then waits, rotating and marking its target, until the host reports that the targeted player has
+// prepared (Level3Controller.playerCombatReady). Alert and waiting are derived from positions on
+// host and client alike; only the start of combat crosses the network, after which both peers run
+// the same fixed timers.
 public class SecurityTurretController {
     public static final int MIN_UNITS = 2;
     public static final int UNIT_COUNT = 4;
     public static final float DRAW_SIZE = 135f;
-    public static final float DETECTION_RADIUS = 360f;
+    // Ranged, but still "close combat": twice the 120 unit melee reach used by the Level 1-3
+    // players and about the 155-210 unit orbit of a Defense Drone. Measured from the turret's
+    // centre to the player's body centre.
+    public static final float TURRET_ATTACK_RANGE = 240f;
 
     private static final int COLUMNS = 8;
     private static final int ROWS = 4;
@@ -26,16 +37,27 @@ public class SecurityTurretController {
     private static final int ROW_RESTORED = 3;
     private static final float MAX_HEALTH = 30f;
     private static final float FRAME_DURATION = 0.09f;
+    public static final float ALERT_DURATION = 0.5f;
+    public static final float READY_DURATION = 0.35f;
     public static final float AIM_DURATION = 0.45f;
     public static final float FIRING_DURATION = COLUMNS * FRAME_DURATION;
     public static final float FIRE_IMPACT_TIME = 6f * FRAME_DURATION;
     private static final float FLASH_DURATION = COLUMNS * FRAME_DURATION;
+    // Time between two damage events of one turret in steady state. The idle wait is derived from
+    // it, so changing any animation timing keeps the spacing at this value (suggested 1.5-2.5 s).
+    public static final float TURRET_DAMAGE_COOLDOWN = 2.4f;
+    private static final float COOLDOWN_DURATION = TURRET_DAMAGE_COOLDOWN
+        - (FIRING_DURATION - FIRE_IMPACT_TIME) - ALERT_DURATION - READY_DURATION
+        - AIM_DURATION - FIRE_IMPACT_TIME;
+    // A hit (sidearm or turn action) keeps the unit from re-engaging for a moment.
+    private static final float HIT_RECOVERY_DURATION = 1.0f;
     private static final float RESTORATION_DURATION = COLUMNS * FRAME_DURATION;
     private static final long FORMATION_SEED = 0x545552524554534CL;
     private static final int ALPHA_THRESHOLD = 20;
 
     public enum AnimationState {
-        IDLE_ROTATING, AIMING, FIRING, DAMAGED, DESTROYING, DESTROYED, RESTORING, RESTORED
+        IDLE_ROTATING, ALERTED, WAITING, COMBAT_READY, AIMING, FIRING,
+        DAMAGED, DESTROYING, DESTROYED, RESTORING, RESTORED
     }
 
     private static final class Unit {
@@ -47,8 +69,15 @@ public class SecurityTurretController {
         boolean disabled;
         AnimationState animationState = AnimationState.IDLE_ROTATING;
         float animTime;
+        float alertTimer;
+        float readyTimer;
         float aimTimer;
         float firingTimer;
+        float cooldownTimer;
+        // >0 from the moment firing starts until the shot lands on the player
+        float impactTimer;
+        boolean impactReady;
+        int targetSide;
         float damagedTimer;
         float restorationTimer;
         float targetX = Float.NaN;
@@ -64,7 +93,9 @@ public class SecurityTurretController {
     private boolean formationReady;
     private int formationCount;
     private int encounterNumber;
-    private boolean firingStarted;
+    private final float[] playerX = new float[2];
+    private final float[] playerY = new float[2];
+    private boolean playersKnown;
 
     @SuppressWarnings("unchecked")
     public SecurityTurretController(float[][] groundPoints) {
@@ -152,11 +183,9 @@ public class SecurityTurretController {
             unit.health = MAX_HEALTH;
             unit.animTime = 0f;
             unit.animationState = AnimationState.IDLE_ROTATING;
-            unit.aimTimer = 0f;
-            unit.firingTimer = 0f;
+            cancelEngagement(unit);
+            unit.cooldownTimer = 0f;
             unit.damagedTimer = 0f;
-            unit.targetX = Float.NaN;
-            unit.targetY = Float.NaN;
             unit.active = true;
             activeCount++;
         }
@@ -203,11 +232,7 @@ public class SecurityTurretController {
         unit.health = Math.max(0f, unit.health - amount);
         unit.damagedTimer = FLASH_DURATION;
         if (unit.health <= 0f) disable(unit);
-        else {
-            unit.animationState = AnimationState.DAMAGED;
-            unit.aimTimer = 0f;
-            unit.firingTimer = 0f;
-        }
+        else interrupt(unit);
         return index;
     }
 
@@ -216,11 +241,14 @@ public class SecurityTurretController {
         Unit unit = units[index];
         unit.damagedTimer = FLASH_DURATION;
         if (destroyed) disable(unit);
-        else {
-            unit.animationState = AnimationState.DAMAGED;
-            unit.aimTimer = 0f;
-            unit.firingTimer = 0f;
-        }
+        else interrupt(unit);
+    }
+
+    // A hit spoils the shot in progress; the unit recovers before it may engage again.
+    private static void interrupt(Unit unit) {
+        unit.animationState = AnimationState.DAMAGED;
+        cancelEngagement(unit);
+        unit.cooldownTimer = HIT_RECOVERY_DURATION;
     }
 
     private static void disable(Unit unit) {
@@ -228,88 +256,115 @@ public class SecurityTurretController {
         unit.destroying = true;
         unit.disabled = true;
         unit.animationState = AnimationState.DESTROYING;
+        cancelEngagement(unit);
+    }
+
+    private static void cancelEngagement(Unit unit) {
+        unit.alertTimer = 0f;
+        unit.readyTimer = 0f;
         unit.aimTimer = 0f;
         unit.firingTimer = 0f;
+        unit.impactTimer = 0f;
+        unit.impactReady = false;
+        unit.targetSide = 0;
+        unit.targetX = Float.NaN;
+        unit.targetY = Float.NaN;
     }
 
-    public int playAiming(float targetX, float targetY) {
-        return playAiming(firstActiveIndex(), targetX, targetY);
-    }
-
-    public int playAiming(int index, float targetX, float targetY) {
-        if (index < 0 || index >= units.length || !units[index].active) return -1;
+    // Host and client: the targeted player is prepared, so this unit may start its attack. Only a
+    // unit that is alerted or waiting can be released; a unit that was destroyed, hit or has left
+    // the range in the meantime ignores the call.
+    public void beginCombat(int index, int side) {
+        if (index < 0 || index >= units.length || (side != 1 && side != 2)) return;
         Unit unit = units[index];
-        Gdx.app.log("SecurityTurretTrace", "playAiming unit=" + index
-            + " target=(" + targetX + ", " + targetY + ")");
-        unit.targetX = targetX;
-        unit.targetY = targetY;
+        if (!unit.active || (unit.animationState != AnimationState.ALERTED
+            && unit.animationState != AnimationState.WAITING
+            && unit.animationState != AnimationState.IDLE_ROTATING)) return;
+        unit.targetSide = side;
+        unit.targetX = playerX[side - 1];
+        unit.targetY = playerY[side - 1];
+        unit.alertTimer = 0f;
+        unit.animationState = AnimationState.COMBAT_READY;
+        unit.readyTimer = READY_DURATION;
+    }
+
+    public boolean isInCombat(int index) {
+        if (index < 0 || index >= units.length) return false;
+        AnimationState state = units[index].animationState;
+        return units[index].active && (state == AnimationState.COMBAT_READY
+            || state == AnimationState.AIMING || state == AnimationState.FIRING);
+    }
+
+    // Both peers feed in the current player positions so tracking and aiming follow the target.
+    public void setTrackedPlayers(float x1, float y1, float x2, float y2) {
+        playersKnown = true;
+        playerX[0] = x1;
+        playerY[0] = y1;
+        playerX[1] = x2;
+        playerY[1] = y2;
+    }
+
+    private void beginAiming(Unit unit) {
         unit.animationState = AnimationState.AIMING;
         unit.aimTimer = AIM_DURATION;
-        unit.firingTimer = 0f;
-        return index;
-    }
-
-    public void playFiring(float targetX, float targetY) {
-        int index = firstAimingIndex();
-        if (index < 0) index = firstActiveIndex();
-        if (index < 0) return;
-        Unit unit = units[index];
-        unit.targetX = targetX;
-        unit.targetY = targetY;
-        if (unit.animationState != AnimationState.FIRING) beginFiring(unit);
-    }
-
-    // Retained for the existing Level 3 event name and older state snapshots.
-    public void playAttackFlash() {
-        playFiring(Float.NaN, Float.NaN);
     }
 
     private void beginFiring(Unit unit) {
-        Gdx.app.log("SecurityTurretTrace", "firing started target=(" + unit.targetX + ", "
-            + unit.targetY + ") duration=" + FIRING_DURATION);
         unit.animationState = AnimationState.FIRING;
         unit.aimTimer = 0f;
         unit.firingTimer = FIRING_DURATION;
+        unit.impactTimer = FIRE_IMPACT_TIME;
+        unit.impactReady = false;
         unit.firingRenderLogged = false;
-        firingStarted = true;
     }
 
-    public boolean consumeFiringStarted() {
-        if (!firingStarted) return false;
-        firingStarted = false;
-        return true;
+    // Host only: returns the targeted side (1 or 2) once when this unit's shot lands, else 0.
+    public int consumeImpactSide(int index) {
+        if (index < 0 || index >= units.length || !units[index].impactReady) return 0;
+        units[index].impactReady = false;
+        return units[index].targetSide;
     }
 
-    // Units are checked from the end to preserve the existing compact count synchronization: a
-    // reaction kill then removes the same unit on host and client without a per-frame unit stream.
-    public int detectingUnit(float targetX, float targetY) {
-        float limit = DETECTION_RADIUS * DETECTION_RADIUS;
-        for (int i = units.length - 1; i >= 0; i--) {
-            Unit unit = units[i];
-            if (!unit.active) continue;
-            float dx = targetX - unit.x;
-            float dy = targetY - (unit.groundY + DRAW_SIZE * 0.5f);
-            float distance = dx * dx + dy * dy;
-            if (distance <= limit) return i;
+    public int targetSide(int index) {
+        return index >= 0 && index < units.length ? units[index].targetSide : 0;
+    }
+
+    public AnimationState stateOf(int index) {
+        return index >= 0 && index < units.length ? units[index].animationState : null;
+    }
+
+    public static String traceName(AnimationState state) {
+        if (state == null) return "NONE";
+        switch (state) {
+            case ALERTED: return "TURRET_ALERTED";
+            case WAITING: return "TURRET_WAITING_FOR_PLAYER_RESPONSE";
+            case COMBAT_READY: return "TURRET_COMBAT_READY";
+            case AIMING: return "TURRET_AIMING";
+            case FIRING: return "TURRET_FIRING";
+            case IDLE_ROTATING: return "TURRET_IDLE";
+            default: return state.name();
         }
-        return -1;
     }
 
     public float distanceSquaredToUnit(int index, float targetX, float targetY) {
         if (index < 0 || index >= units.length || !units[index].active) return Float.POSITIVE_INFINITY;
-        Unit unit = units[index];
+        return distanceSquared(units[index], targetX, targetY);
+    }
+
+    private static float distanceSquared(Unit unit, float targetX, float targetY) {
         float dx = targetX - unit.x;
         float dy = targetY - (unit.groundY + DRAW_SIZE * 0.5f);
         return dx * dx + dy * dy;
     }
 
-    public float nearestActiveDistance(float targetX, float targetY) {
-        float best = Float.POSITIVE_INFINITY;
-        for (int i = 0; i < units.length; i++) {
-            float distanceSquared = distanceSquaredToUnit(i, targetX, targetY);
-            if (distanceSquared < best) best = distanceSquared;
-        }
-        return best == Float.POSITIVE_INFINITY ? best : (float) Math.sqrt(best);
+    // The nearer player inside this unit's own attack range (1 or 2), or 0 when both are outside.
+    private int sideInRange(Unit unit) {
+        if (!playersKnown) return 0;
+        float limit = TURRET_ATTACK_RANGE * TURRET_ATTACK_RANGE;
+        float d1 = distanceSquared(unit, playerX[0], playerY[0]);
+        float d2 = distanceSquared(unit, playerX[1], playerY[1]);
+        if (d1 > limit && d2 > limit) return 0;
+        return d1 <= d2 ? 1 : 2;
     }
 
     public boolean isUnitActive(int index) {
@@ -363,14 +418,34 @@ public class SecurityTurretController {
                 && unit.animationState != AnimationState.RESTORING
                 && unit.animationState != AnimationState.RESTORED) continue;
             unit.animTime += delta;
-            if (unit.animationState == AnimationState.AIMING) {
+            unit.cooldownTimer = Math.max(0f, unit.cooldownTimer - delta);
+            if (unit.active) updateAlert(unit);
+            if (unit.animationState == AnimationState.ALERTED) {
+                unit.alertTimer = Math.max(0f, unit.alertTimer - delta);
+                if (unit.alertTimer <= 0f) unit.animationState = AnimationState.WAITING;
+            }
+            if (unit.animationState == AnimationState.COMBAT_READY
+                || unit.animationState == AnimationState.AIMING) {
+                // The beam follows the player until the shot is fired, then stays where it went.
+                unit.targetX = playerX[unit.targetSide - 1];
+                unit.targetY = playerY[unit.targetSide - 1];
+            }
+            if (unit.animationState == AnimationState.COMBAT_READY) {
+                unit.readyTimer = Math.max(0f, unit.readyTimer - delta);
+                if (unit.readyTimer <= 0f) beginAiming(unit);
+            } else if (unit.animationState == AnimationState.AIMING) {
                 unit.aimTimer = Math.max(0f, unit.aimTimer - delta);
                 if (unit.aimTimer <= 0f) beginFiring(unit);
             } else if (unit.animationState == AnimationState.FIRING) {
+                if (unit.impactTimer > 0f) {
+                    unit.impactTimer = Math.max(0f, unit.impactTimer - delta);
+                    if (unit.impactTimer <= 0f) unit.impactReady = true;
+                }
                 unit.firingTimer = Math.max(0f, unit.firingTimer - delta);
                 if (unit.firingTimer <= 0f) {
                     unit.animationState = AnimationState.IDLE_ROTATING;
                     unit.animTime = 0f;
+                    unit.cooldownTimer = COOLDOWN_DURATION;
                     unit.targetX = Float.NaN;
                     unit.targetY = Float.NaN;
                 }
@@ -392,6 +467,55 @@ public class SecurityTurretController {
                 unit.animTime = 0f;
                 Gdx.app.log("Level3RestorationTrace", "Turret " + index + " restored blue state");
             }
+        }
+    }
+
+    // Purely positional, so host and client agree without any message: a unit that is free enters
+    // ALERTED when a player steps inside its range, and drops back to idle when they all leave.
+    private void updateAlert(Unit unit) {
+        AnimationState state = unit.animationState;
+        boolean idle = state == AnimationState.IDLE_ROTATING;
+        if (!idle && state != AnimationState.ALERTED && state != AnimationState.WAITING) return;
+        int side = sideInRange(unit);
+        if (side == 0) {
+            if (!idle) {
+                unit.animationState = AnimationState.IDLE_ROTATING;
+                unit.animTime = 0f;
+                cancelEngagement(unit);
+            }
+            return;
+        }
+        if (idle) {
+            if (unit.cooldownTimer > 0f) return;
+            unit.animationState = AnimationState.ALERTED;
+            unit.alertTimer = ALERT_DURATION;
+        }
+        // Rotating toward the player: keep marking whoever is nearest until combat is released.
+        unit.targetSide = side;
+        unit.targetX = playerX[side - 1];
+        unit.targetY = playerY[side - 1];
+    }
+
+    public boolean hasWarningToDraw() {
+        for (Unit unit : units) {
+            if (isWarning(unit) && unit.targetSide != 0) return true;
+        }
+        return false;
+    }
+
+    private static boolean isWarning(Unit unit) {
+        return unit.active && (unit.animationState == AnimationState.ALERTED
+            || unit.animationState == AnimationState.WAITING);
+    }
+
+    // World-space targeting marker on the player a waiting turret has picked. It is a soft pulsing
+    // disc, not a beam: an alerted turret never draws a laser and never deals damage.
+    public void drawWarning(ShapeRenderer shape) {
+        for (Unit unit : units) {
+            if (!isWarning(unit) || unit.targetSide == 0 || Float.isNaN(unit.targetX)) continue;
+            float pulse = 0.5f + 0.5f * (float) Math.sin(unit.animTime * 9.0);
+            shape.setColor(1f, 0.55f, 0.12f, 0.16f + 0.16f * pulse);
+            shape.circle(unit.targetX, unit.targetY, 38f + 8f * pulse);
         }
     }
 
@@ -428,7 +552,12 @@ public class SecurityTurretController {
                 row = ROW_IDLE;
                 time = (AIM_DURATION - unit.aimTimer) * FLASH_DURATION / AIM_DURATION;
                 loop = false;
-            } else { // IDLE_ROTATING
+            } else if (isWarning(unit)) {
+                // Warning animation: the idle rotation runs fast while the turret picks its target.
+                row = ROW_IDLE;
+                time = unit.animTime * 2.5f;
+                loop = true;
+            } else { // IDLE_ROTATING, COMBAT_READY
                 row = ROW_IDLE;
                 time = unit.animTime;
                 loop = true;
@@ -438,7 +567,13 @@ public class SecurityTurretController {
             float scale = DRAW_SIZE / frame.getRegionHeight();
             float drawW = frame.getRegionWidth() * scale;
             float drawY = unit.groundY - opaqueBottomOffsets[row][frameIndex];
+            boolean warning = isWarning(unit);
+            if (warning) {
+                float pulse = 0.5f + 0.5f * (float) Math.sin(unit.animTime * 9.0);
+                batch.setColor(1f, 0.72f - 0.22f * pulse, 0.45f - 0.2f * pulse, 1f);
+            }
             batch.draw(frame, unit.x - drawW / 2f, drawY, drawW, DRAW_SIZE);
+            if (warning) batch.setColor(1f, 1f, 1f, 1f);
         }
     }
 
@@ -472,18 +607,6 @@ public class SecurityTurretController {
         return 0;
     }
 
-    private int firstActiveIndex() {
-        for (int i = 0; i < units.length; i++) if (units[i].active) return i;
-        return -1;
-    }
-
-    private int firstAimingIndex() {
-        for (int i = 0; i < units.length; i++) {
-            if (units[i].active && units[i].animationState == AnimationState.AIMING) return i;
-        }
-        return -1;
-    }
-
     private int lastActiveIndex() {
         for (int i = units.length - 1; i >= 0; i--) if (units[i].active) return i;
         return -1;
@@ -495,7 +618,6 @@ public class SecurityTurretController {
     }
 
     public void reset() {
-        firingStarted = false;
         formationReady = false;
         formationCount = 0;
         for (Unit unit : units) {
@@ -505,12 +627,10 @@ public class SecurityTurretController {
             unit.disabled = false;
             unit.animationState = AnimationState.IDLE_ROTATING;
             unit.animTime = 0f;
-            unit.aimTimer = 0f;
-            unit.firingTimer = 0f;
+            cancelEngagement(unit);
+            unit.cooldownTimer = 0f;
             unit.damagedTimer = 0f;
             unit.restorationTimer = 0f;
-            unit.targetX = Float.NaN;
-            unit.targetY = Float.NaN;
             unit.firingRenderLogged = false;
         }
     }

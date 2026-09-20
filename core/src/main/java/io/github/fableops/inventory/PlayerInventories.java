@@ -143,10 +143,10 @@ public class PlayerInventories {
     public void renderItemInfoPopup(ShapeRenderer shape, SpriteBatch batch, float uiWorldW,
                                     int side, String title, String ownerName, int quantity,
                                     String description, boolean consumesUse, InventoryItem item,
-                                    Color accent) {
+                                    boolean available, Color accent) {
         InventoryUI ui = side == 1 ? uiP1 : uiP2;
         ui.renderCarriedItemPopup(shape, batch, uiWorldW, side, title, ownerName, quantity,
-            description, consumesUse, item, accent);
+            description, consumesUse, item, available, accent);
     }
 
     public void dispose() {

@@ -156,6 +156,17 @@ public class LootField {
         return drop == gunDrop;
     }
 
+    // Item definitions remain available after pickup so later levels can render a category preview
+    // even when the current player owns zero copies. The returned item is definition data only;
+    // callers must not add it to an inventory.
+    public InventoryItem itemDefinition(String itemName) {
+        for (LootDrop drop : drops) {
+            InventoryItem item = drop.getItem();
+            if (itemName.equalsIgnoreCase(item.getName())) return item;
+        }
+        return null;
+    }
+
     // Everything goes back into the maze when the level restarts
     public void reset() {
         for (int i = 0; i < drops.size(); i++) drops.get(i).setCollected(false);

@@ -367,11 +367,11 @@ public class InventoryUI {
     public void renderCarriedItemInfo(SpriteBatch batch, String title, String ownerName,
                                       int quantity, String description, boolean consumesUse,
                                       float x, float topY, float width, Color accent) {
-        font.getData().setScale(0.95f);
+        font.getData().setScale(1.25f);
         font.setColor(ORANGE);
         font.draw(batch, title, x, topY);
 
-        font.getData().setScale(0.76f);
+        font.getData().setScale(0.96f);
         font.setColor(DIM);
         font.draw(batch, "Owned by: " + ownerName, x, topY - 31f);
         font.draw(batch, "Quantity: " + quantity, x + width * 0.54f, topY - 31f);
@@ -387,10 +387,10 @@ public class InventoryUI {
     public void renderCarriedItemPopup(ShapeRenderer shape, SpriteBatch batch,
                                        float uiWorldW, int side, String title, String ownerName,
                                        int quantity, String description, boolean consumesUse,
-                                       InventoryItem item,
+                                       InventoryItem item, boolean available,
                                        Color accent) {
-        float popupW = 500f;
-        float popupH = 170f;
+        float popupW = 540f;
+        float popupH = 250f;
         float halfW = uiWorldW / 2f;
         float x = (side == 1 ? 0f : halfW) + (halfW - popupW) / 2f;
         float y = 190f;
@@ -412,13 +412,20 @@ public class InventoryUI {
         float infoX = x + 18f;
         float infoW = popupW - 36f;
         if (item != null && item.getIcon() != null) {
-            float iconSize = 96f;
-            batch.draw(item.getIcon(), x + 18f, y + 37f, iconSize, iconSize);
+            float iconSize = 128f;
+            batch.draw(item.getIcon(), x + 18f, y + 64f, iconSize, iconSize);
             infoX += iconSize + 20f;
             infoW -= iconSize + 20f;
         }
         renderCarriedItemInfo(batch, title, ownerName, quantity, description, consumesUse,
             infoX, y + popupH - 24f, infoW, accent);
+        font.getData().setScale(0.96f);
+        font.setColor(available ? accent : MAGENTA);
+        font.draw(batch, "Status: " + (available ? "AVAILABLE" : "NOT AVAILABLE"),
+            infoX, y + 42f);
+        font.getData().setScale(0.86f);
+        font.setColor(DIM);
+        font.draw(batch, "ENTER  CLOSE", infoX, y + 18f);
         batch.end();
         Gdx.gl.glDisable(GL20.GL_BLEND);
     }

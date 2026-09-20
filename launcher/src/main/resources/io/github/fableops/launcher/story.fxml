@@ -32,7 +32,7 @@
             </GridPane>
         </VBox>
 
-        <HBox alignment="CENTER_RIGHT" spacing="28">
+        <HBox fx:id="promptRow" alignment="CENTER_RIGHT" spacing="28">
             <Label fx:id="prompt" styleClass="story-prompt" />
             <Label fx:id="ready" styleClass="story-ready" />
         </HBox>

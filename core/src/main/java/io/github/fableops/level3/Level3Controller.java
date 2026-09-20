@@ -42,6 +42,14 @@ public class Level3Controller {
     private static final float RESOLUTION_DELAY = 1.9f;
     private static final float STAND_DOWN_DELAY = 3.5f;
     private static final float ENDING_DELAY = 2.0f;
+    private static final int DRONE_COUNT = 4;
+    private static final int TURRET_COUNT = 4;
+    private static final float TURRET_DAMAGE = 14f;
+    private static final float RANGE_TRACE_INTERVAL = 2f;
+    // One Side Arm hit destroys a Security Turret (MAX_HEALTH 30). Kept above that on purpose so a
+    // later change to turret HP does not quietly turn this back into a multi-shot fight. Applies
+    // only to Side Arm damage against turrets; the drone and every other weapon value are unchanged.
+    private static final float TURRET_SIDEARM_DAMAGE = 50f;
 
     private final HostSession hostSession;
     private final PlayerInventories inventories;
@@ -63,8 +71,6 @@ public class Level3Controller {
     private boolean breakerSupported;
     private Player pendingDroneTarget;
     private float pendingDroneDamageTimer = -1f;
-    private Player pendingTurretTarget;
-    private float pendingTurretDamageTimer = -1f;
     private float standDownTimer = -1f;
     private float endingTimer = -1f;
     private boolean endingReady;
@@ -76,9 +82,23 @@ public class Level3Controller {
     private boolean reactionBlocksDamage;
     private int reactionSelectionOrdinal = -1;
     private int damageAppliedTargetSide;
-    private boolean p1InsideTurretRadius;
-    private boolean p2InsideTurretRadius;
-    private boolean turretRangeMissLogged;
+    // Set while a story overlay covers the arena: no new turret engagements begin, shots already
+    // in flight still land.
+    private boolean turretAiPaused;
+    // Set only when the targeted player completes a Side Arm / Shield / Medkit reaction (or has
+    // nothing to prepare). Cleared when that player is out of every turret's range. Index = side - 1.
+    private final boolean[] playerCombatReady = new boolean[2];
+    // A Shield reaction blocks the next turret hit on that player. Index = side - 1.
+    private final boolean[] turretShieldBlock = new boolean[2];
+    // The single turret currently allowed to attack (at most one attacker at a time, so at most one
+    // per player); other turrets in range stay ALERTED/WAITING.
+    private int turretCombatUnit = -1;
+    private float traceRangeTimer;
+    // Which unit/target the next broadcast announces as "just started tracking".
+    private int turretEventUnit = -1;
+    private int turretEventSide;
+    private final SecurityTurretController.AnimationState[] tracedTurretState =
+        new SecurityTurretController.AnimationState[SecurityTurretController.UNIT_COUNT];
     private boolean defenseRestorationInProgress;
     private boolean restorationStarted;
     private boolean restorationCompleted;
@@ -93,7 +113,6 @@ public class Level3Controller {
     private boolean wardenDamaged;
     private boolean droneAttacked;
     private boolean turretAiming;
-    private boolean turretAttacked;
     private int droneDamagedIndex = -1;
     private int turretDamagedIndex = -1;
     private boolean turretDestroyed;
@@ -116,6 +135,7 @@ public class Level3Controller {
         warden = new WardenController(wardenAnchor[0], wardenAnchor[1]);
         drone = new DefenseDroneController(droneAnchor[0], droneAnchor[1]);
         turret = new SecurityTurretController(world.getTurretGroundPoints());
+        Arrays.fill(tracedTurretState, SecurityTurretController.AnimationState.IDLE_ROTATING);
     }
 
     public WardenController getWarden() { return warden; }
@@ -132,31 +152,183 @@ public class Level3Controller {
     public EnemyAttackType getReactionAttackType() { return reactionAttackType; }
     public int getReactionTargetSide() { return reactionTargetSide; }
 
-    // Called only during Level3Screen's existing between-turn movement window. A player triggers
-    // once on entering a turret radius and must leave before the same proximity can trigger again.
-    public boolean detectTurretThreat() {
-        if (reactionOpen || pendingDroneDamageTimer > 0f || pendingTurretDamageTimer > 0f
-            || turnManager.getPhase() != TurnManager.Phase.PLAYER_TURN || !turret.isActive()) {
-            return false;
-        }
-        boolean p1Inside = turret.detectingUnit(player1.centreX(), player1.centreY()) >= 0;
-        boolean p2Inside = turret.detectingUnit(player2.centreX(), player2.centreY()) >= 0;
-        if (!p1Inside && !p2Inside) {
-            if (!turretRangeMissLogged) logTurretRangeMiss();
-            turretRangeMissLogged = true;
-        } else {
-            turretRangeMissLogged = false;
-        }
-        boolean p1Entered = p1Inside && !p1InsideTurretRadius;
-        boolean p2Entered = p2Inside && !p2InsideTurretRadius;
-        p1InsideTurretRadius = p1Inside;
-        p2InsideTurretRadius = p2Inside;
-        if (!p1Entered && !p2Entered) return false;
+    public void setTurretAiPaused(boolean paused) { turretAiPaused = paused; }
 
-        Player target = p1Entered && p2Entered ? nearerDetectedPlayer() : p1Entered ? player1 : player2;
-        openTurretReaction(target);
+    public boolean isPlayerCombatReady(int side) {
+        return (side == 1 || side == 2) && playerCombatReady[side - 1];
+    }
+
+    // Each turret is a stationary enemy that measures its own distance to each player.
+    //   IDLE -> ALERTED -> WAITING_FOR_PLAYER_RESPONSE -> COMBAT_READY -> AIMING -> FIRING
+    // Alert and waiting come from range alone (SecurityTurretController.updateAlert) and never fire.
+    // A waiting turret opens a reaction for its target; only when that player has prepared does the
+    // host release it (beginTurretCombat). Damage lands once, at the impact frame, then cools down.
+    private void updateTurretAI(float delta) {
+        traceRangeTimer -= delta;
+        if (traceRangeTimer <= 0f) {
+            traceRangeTimer = RANGE_TRACE_INTERVAL;
+            traceRange(1, player1);
+            traceRange(2, player2);
+        }
+        boolean hostile = !warden.getState().isStoodDown()
+            && warden.getState() != WardenState.DUAL_AUTHORIZATION;
+        boolean detected1 = false;
+        boolean detected2 = false;
+        for (int i = 0; i < SecurityTurretController.UNIT_COUNT; i++) {
+            traceTurretState(i);
+            detected1 |= turretInRange(i, player1);
+            detected2 |= turretInRange(i, player2);
+        }
+        if (!detected1) resetPlayerPreparation(1);
+        if (!detected2) resetPlayerPreparation(2);
+
+        if (reactionOpen && reactionAttackType == EnemyAttackType.TURRET
+            && turret.stateOf(reactionUnitIndex) != SecurityTurretController.AnimationState.WAITING) {
+            // The target left the range, or the turret was hit or destroyed, before any response.
+            Gdx.app.log("SecurityTurretTrace", "alert cancelled turretID=" + reactionUnitIndex);
+            clearReactionAttack();
+            broadcast();
+        }
+        for (int i = 0; i < SecurityTurretController.UNIT_COUNT; i++) {
+            int impactSide = turret.consumeImpactSide(i);
+            if (impactSide != 0) applyTurretImpact(i, impactSide, hostile);
+        }
+        if (turretCombatUnit >= 0 && !turret.isInCombat(turretCombatUnit)) turretCombatUnit = -1;
+        allocateTurretAttack(hostile);
+    }
+
+    // Periodic proof that far-away players are not detected: nearest turret, distance, range.
+    private void traceRange(int side, Player player) {
+        int nearest = -1;
+        float best = Float.POSITIVE_INFINITY;
+        for (int i = 0; i < SecurityTurretController.UNIT_COUNT; i++) {
+            float d = turret.distanceSquaredToUnit(i, player.centreX(), player.centreY());
+            if (d < best) {
+                best = d;
+                nearest = i;
+            }
+        }
+        if (nearest < 0) return;
+        float distance = (float) Math.sqrt(best);
+        Gdx.app.log("SecurityTurretTrace", "range check turretID=" + nearest + " playerID=P" + side
+            + " distance=" + Math.round(distance)
+            + " attackRange=" + Math.round(SecurityTurretController.TURRET_ATTACK_RANGE)
+            + " currentState=" + SecurityTurretController.traceName(turret.stateOf(nearest))
+            + " detected=" + (distance <= SecurityTurretController.TURRET_ATTACK_RANGE));
+    }
+
+    private boolean turretInRange(int unit, Player player) {
+        if (player.health <= 0f) return false;
+        float limit = SecurityTurretController.TURRET_ATTACK_RANGE
+            * SecurityTurretController.TURRET_ATTACK_RANGE;
+        return turret.distanceSquaredToUnit(unit, player.centreX(), player.centreY()) <= limit;
+    }
+
+    private void resetPlayerPreparation(int side) {
+        if (!playerCombatReady[side - 1] && !turretShieldBlock[side - 1]) return;
+        playerCombatReady[side - 1] = false;
+        turretShieldBlock[side - 1] = false;
+        Gdx.app.log("SecurityTurretTrace", "playerID=P" + side
+            + " left every turret range: playerCombatReady=false");
+    }
+
+    // At most one turret attacks at a time. The first waiting turret either attacks (its target
+    // already prepared) or opens the alert reaction; the rest keep waiting their turn.
+    private void allocateTurretAttack(boolean hostile) {
+        if (!hostile || turretAiPaused || turretCombatUnit >= 0 || reactionOpen
+            || pendingDroneDamageTimer > 0f) return;
+        for (int i = 0; i < SecurityTurretController.UNIT_COUNT; i++) {
+            if (turret.stateOf(i) != SecurityTurretController.AnimationState.WAITING) continue;
+            int side = turret.targetSide(i);
+            Player target = side == 1 ? player1 : side == 2 ? player2 : null;
+            if (target == null || target.health <= 0f) continue;
+            if (playerCombatReady[side - 1]) beginTurretCombat(i, side);
+            else openTurretAlertReaction(i, side, target);
+            return;
+        }
+    }
+
+    private void openTurretAlertReaction(int unit, int side, Player target) {
+        reactionOpen = true;
+        reactionAttackType = EnemyAttackType.TURRET;
+        reactionTargetSide = side;
+        reactionUnitIndex = unit;
+        reactionBlocksDamage = false;
+        wardenLine = "A security turret has locked onto " + callSignOf(target)
+            + ". Prepare Side Arm, Shield or Medkit.";
+        Gdx.app.log("SecurityTurretTrace", "waiting for player response turretID=" + unit
+            + " playerID=P" + side + " playerCombatReady=false");
         broadcast();
-        return reactionOpen;
+    }
+
+    private void beginTurretCombat(int unit, int side) {
+        turret.beginCombat(unit, side);
+        if (!turret.isInCombat(unit)) return;
+        turretCombatUnit = unit;
+        turretAiming = true;
+        turretEventUnit = unit;
+        turretEventSide = side;
+        traceTurretState(unit);
+        broadcast();
+    }
+
+    private void applyTurretImpact(int unit, int side, boolean hostile) {
+        Player target = side == 1 ? player1 : player2;
+        boolean blocked = turretShieldBlock[side - 1];
+        turretShieldBlock[side - 1] = false;
+        boolean applied = hostile && !blocked && target.health > 0f;
+        if (applied) {
+            applyWardenDamage(target, TURRET_DAMAGE);
+            damageAppliedTargetSide = side;
+        }
+        if (unit == turretCombatUnit) turretCombatUnit = -1;
+        traceTurret(unit, side, "TURRET_IMPACT" + (blocked ? " (shield blocked)" : ""), applied);
+        // Commits the health change; the client already started the animation itself.
+        if (applied) broadcast();
+    }
+
+    private boolean hasReactionEquipment(int side) {
+        Inventory inventory = inventories.forPlayer(side);
+        PlayerActionType weapon = roleForSide(side) == Role.BREAKER
+            ? PlayerActionType.BREAKER_WEAPON_ATTACK : PlayerActionType.LISTENER_WEAPON_ATTACK;
+        PlayerActionType shield = roleForSide(side) == Role.BREAKER
+            ? PlayerActionType.BREAKER_SHIELD_DEFENSE : PlayerActionType.LISTENER_SHIELD_DEFENSE;
+        for (int slot = 0; slot < Inventory.CAPACITY; slot++) {
+            InventoryItem item = inventory.get(slot);
+            if ((gun != null && gun.hasAmmo() && itemSupportsAction(weapon, item))
+                || itemSupportsAction(shield, item)
+                || itemSupportsAction(PlayerActionType.USE_MEDKIT, item)) return true;
+        }
+        return false;
+    }
+
+    private void traceTurretState(int unit) {
+        SecurityTurretController.AnimationState state = turret.stateOf(unit);
+        if (state == tracedTurretState[unit]) return;
+        tracedTurretState[unit] = state;
+        if (state == SecurityTurretController.AnimationState.IDLE_ROTATING
+            || state == SecurityTurretController.AnimationState.ALERTED
+            || state == SecurityTurretController.AnimationState.WAITING
+            || state == SecurityTurretController.AnimationState.COMBAT_READY
+            || state == SecurityTurretController.AnimationState.AIMING
+            || state == SecurityTurretController.AnimationState.FIRING) {
+            traceTurret(unit, turret.targetSide(unit), SecurityTurretController.traceName(state), false);
+        }
+    }
+
+    private void traceTurret(int unit, int side, String state, boolean damageApplied) {
+        Player target = side == 1 ? player1 : side == 2 ? player2 : null;
+        float distanceSquared = target == null ? Float.POSITIVE_INFINITY
+            : turret.distanceSquaredToUnit(unit, target.centreX(), target.centreY());
+        String distance = Float.isInfinite(distanceSquared) ? "n/a"
+            : String.valueOf(Math.round(Math.sqrt(distanceSquared)));
+        Gdx.app.log("SecurityTurretTrace", "turretID=" + unit
+            + " playerID=" + (side == 0 ? "none" : "P" + side)
+            + " distance=" + distance
+            + " attackRange=" + Math.round(SecurityTurretController.TURRET_ATTACK_RANGE)
+            + " currentState=" + state
+            + " playerCombatReady=" + isPlayerCombatReady(side)
+            + " damageApplied=" + damageApplied);
     }
 
     public boolean isAuthorizationAllowed() {
@@ -170,8 +342,8 @@ public class Level3Controller {
     }
 
     public void startEncounter() {
-        drone.spawnAll();
-        turret.activateAll();
+        drone.setActiveCount(DRONE_COUNT);
+        turret.setActiveCount(TURRET_COUNT);
         wardenLine = "Unauthorized operators detected. Defensive protocol active.";
         broadcast();
     }
@@ -365,10 +537,18 @@ public class Level3Controller {
                     itemAt(inventories, side, inventorySlot))) return;
                 break;
             case NONE:
+                // A turret is released only by preparing (X/H/M). With no usable equipment there
+                // is nothing to prepare, so taking the hit releases it; otherwise NONE is ignored.
+                if (reactionAttackType == EnemyAttackType.TURRET && hasReactionEquipment(side)) return;
                 inventorySlot = -1;
                 break;
             default:
                 return;
+        }
+
+        if (reactionAttackType == EnemyAttackType.TURRET) {
+            confirmTurretReaction(side, target, reaction, inventorySlot, shieldAction);
+            return;
         }
 
         reactionOpen = false;
@@ -380,21 +560,15 @@ public class Level3Controller {
         if (reaction == ReactionType.SIDEARM) {
             target.startShooting();
             gun.useTurnBasedRound();
-            float hitX = reactionAttackType == EnemyAttackType.DRONE
-                ? drone.unitX(reactionUnitIndex) : turret.unitX(reactionUnitIndex);
-            float hitY = reactionAttackType == EnemyAttackType.DRONE
-                ? drone.unitY(reactionUnitIndex) : turret.unitY(reactionUnitIndex);
-            boolean hit = reactionAttackType == EnemyAttackType.DRONE
-                ? damageReactionDrone(gun.turnBasedDamage())
-                : damageReactionTurret(gun.turnBasedDamage());
+            float hitX = drone.unitX(reactionUnitIndex);
+            float hitY = drone.unitY(reactionUnitIndex);
+            boolean hit = damageReactionDrone(gun.turnBasedDamage());
             gun.showTurnBasedShot(target, hitX, hitY, hit);
             setOperatorLine(side, callSignOf(target) + " fires the Sidearm into the incoming attack.");
             Gdx.app.log("Level3ReactionTrace", "Player Sidearm used side=" + side
                 + " ammoRemaining=" + gun.getTotalRounds() + " hit=" + hit);
             if (!reactionSourceActive()) {
-                wardenLine = reactionAttackType == EnemyAttackType.DRONE
-                    ? "The attacking defense drone is destroyed before impact."
-                    : "The detected security turret is destroyed before it can aim.";
+                wardenLine = "The attacking defense drone is destroyed before impact.";
                 clearReactionAttack();
                 broadcast();
                 return;
@@ -418,6 +592,57 @@ public class Level3Controller {
         broadcast();
     }
 
+    // The targeted player answered a turret alert. Nothing hits them yet: this only applies the
+    // chosen equipment and sets playerCombatReady, which is what lets the waiting turret start.
+    private void confirmTurretReaction(int side, Player target, ReactionType reaction,
+                                       int inventorySlot, PlayerActionType shieldAction) {
+        int unit = reactionUnitIndex;
+        if (reaction == ReactionType.SIDEARM && !turretSidearmTargetValid(unit, target)) {
+            Gdx.app.log("SecurityTurretTrace", "sidearm rejected turretID=" + unit
+                + " (turret inactive or target out of range)");
+            return;
+        }
+        reactionSelectionOrdinal = reaction.ordinal();
+        Gdx.app.log("SecurityTurretTrace", "player response side=" + side + " reaction=" + reaction
+            + " turretID=" + unit);
+        if (reaction == ReactionType.SIDEARM) {
+            target.startShooting();
+            gun.useTurnBasedRound();
+            int before = turret.getActiveCount();
+            float hitX = turret.unitX(unit);
+            float hitY = turret.unitY(unit);
+            turretDamagedIndex = turret.damage(unit, TURRET_SIDEARM_DAMAGE);
+            turretDestroyed = turretDamagedIndex >= 0 && turret.getActiveCount() < before;
+            gun.showTurnBasedShot(target, hitX, hitY, turretDamagedIndex >= 0);
+            setOperatorLine(side, callSignOf(target) + (turretDestroyed
+                ? " destroys the locked turret with one Sidearm shot."
+                : " opens fire on the locked turret."));
+            Gdx.app.log("SecurityTurretTrace", "sidearm hit turretID=" + unit
+                + " destroyed=" + turretDestroyed);
+        } else if (reaction == ReactionType.SHIELD) {
+            target.startShielding();
+            setOperatorLine(side, useShield(target, inventorySlot, shieldAction));
+            turretShieldBlock[side - 1] = true;
+        } else if (reaction == ReactionType.MEDKIT) {
+            setOperatorLine(side, useMedkit(target, inventorySlot));
+        } else {
+            setOperatorLine(side, callSignOf(target) + " has nothing to deploy against the turret.");
+        }
+        playerCombatReady[side - 1] = true;
+        Gdx.app.log("SecurityTurretTrace", "playerID=P" + side + " playerCombatReady=true");
+        clearReactionAttack();
+        broadcast();
+    }
+
+    // The Side Arm may only hit the turret that is locked onto this player: it must exist, be
+    // active, and be inside its own attack range (well within the Side Arm's 520 unit reach).
+    private boolean turretSidearmTargetValid(int unit, Player target) {
+        if (!turret.isUnitActive(unit)) return false;
+        float limit = SecurityTurretController.TURRET_ATTACK_RANGE
+            * SecurityTurretController.TURRET_ATTACK_RANGE;
+        return turret.distanceSquaredToUnit(unit, target.centreX(), target.centreY()) <= limit;
+    }
+
     private void setOperatorLine(int side, String line) {
         if (roleForSide(side) == Role.BREAKER) breakerLine = line;
         else listenerLine = line;
@@ -426,6 +651,8 @@ public class Level3Controller {
     public void update(float delta) {
         warden.update(delta);
         drone.update(delta);
+        turret.setTrackedPlayers(player1.centreX(), player1.centreY(),
+            player2.centreX(), player2.centreY());
         turret.update(delta);
         if (defenseRestorationInProgress && drone.isRestorationComplete()
             && turret.isRestorationComplete()) {
@@ -434,12 +661,8 @@ public class Level3Controller {
             Gdx.app.log("Level3RestorationTrace", "Defense network restoration completed");
             broadcast();
         }
-        if (turret.consumeFiringStarted()) {
-            turretAttacked = true;
-            broadcast();
-        }
+        updateTurretAI(delta);
         updatePendingDroneAttack(delta);
-        updatePendingTurretAttack(delta);
 
         if (standDownTimer > 0f) {
             standDownTimer -= delta;
@@ -474,7 +697,7 @@ public class Level3Controller {
 
         // The existing WARDEN_TURN phase remains active, but its display timer does not advance
         // while the targeted player is choosing a response or while the telegraphed hit is pending.
-        if (reactionOpen || pendingDroneDamageTimer > 0f || pendingTurretDamageTimer > 0f) return;
+        if (reactionOpen || pendingDroneDamageTimer > 0f || turretCombatUnit >= 0) return;
 
         switch (turnManager.getPhase()) {
             case PLAYER_TURN:
@@ -589,7 +812,6 @@ public class Level3Controller {
         String name = callSignOf(self);
         switch (action) {
             case BREAKER_PHYSICAL_STRIKE: {
-                self.startAttack();
                 boolean hitDefense = damageDefense(15f);
                 boolean hitWarden = !hitDefense && strikeWarden();
                 boolean hit = hitDefense || hitWarden;
@@ -601,7 +823,6 @@ public class Level3Controller {
             }
             case BREAKER_WEAPON_ATTACK:
             case LISTENER_WEAPON_ATTACK: {
-                self.startShooting();
                 int side = self == player1 ? 1 : 2;
                 InventoryItem selected = itemAt(inventories, side, inventorySlot);
                 if (!itemSupportsAction(action, selected) || !hasSidearm(inventories, gun, side)
@@ -609,7 +830,8 @@ public class Level3Controller {
                     return name + " finds the recovered sidearm empty.";
                 }
                 float damage = gun.turnBasedDamage();
-                boolean hitDefense = damageDefense(damage);
+                boolean hitDefense = drone.isActive()
+                    ? damageDrone(damage) : damageTurret(TURRET_SIDEARM_DAMAGE);
                 boolean hitWarden = !hitDefense && strikeWarden();
                 boolean hit = hitDefense || hitWarden;
                 gun.showTurnBasedShot(self, warden.centreX(), warden.centreY() - 60f, hit);
@@ -621,36 +843,29 @@ public class Level3Controller {
                         : ", but no target remains online.");
             }
             case BREAKER_DISABLE_DRONE: {
-                self.startAttack();
                 boolean hit = damageDrone(30f);
                 addProgress((hit ? 7f : 3f) + (breakerSupported ? 3f : 0f), 6f);
                 return name + " " + action.flavorVerb()
                     + (hit ? ", and it powers down." : ", but finds no deployed drone.");
             }
             case BREAKER_REPAIR_MECHANISM:
-                self.startAttack();
                 addProgress(9f + (breakerSupported ? 3f : 0f), 8f);
                 return name + " " + action.flavorVerb() + ".";
             case BREAKER_PROTECT_LISTENER:
-                self.startAttack();
                 listenerProtected = true;
                 addProgress(4f, 5f);
                 return name + " " + action.flavorVerb() + ".";
             case BREAKER_SHIELD_DEFENSE:
             case LISTENER_SHIELD_DEFENSE:
-                self.startShielding();
                 return useShield(self, inventorySlot, action);
             case LISTENER_SCAN_WARDEN:
-                self.startAttack();
                 addProgress(7f, 6f);
                 return name + " " + action.flavorVerb() + ".";
             case LISTENER_REDUCE_SUBROUTINE:
-                self.startAttack();
                 addProgress(8f, 9f);
                 nextWardenDamageMultiplier = 0.6f;
                 return name + " " + action.flavorVerb() + ".";
             case LISTENER_RECOVER_LOGS:
-                self.startAttack();
                 if (!defensesCleared()) {
                     return name + " cannot recover the Warden's memory while defenses remain online.";
                 }
@@ -668,15 +883,12 @@ public class Level3Controller {
                     + " state=" + warden.getState());
                 return name + " recovers the Warden's memory record. Authorization is now available.";
             case LISTENER_AUTHORIZATION_ATTEMPT:
-                self.startAttack();
                 addProgress(6f, 5f);
                 return name + " " + action.flavorVerb() + ".";
             case LISTENER_SUPPORT_BREAKER:
-                self.startAttack();
                 addProgress(4f, 4f);
                 return name + " " + action.flavorVerb() + ".";
             case USE_MEDKIT:
-                self.startAttack();
                 return useMedkit(self, inventorySlot);
             case USE_ITEM:
                 return useItem(self);
@@ -820,15 +1032,10 @@ public class Level3Controller {
             return;
         }
 
-        // Existing deployed defenses get the first response. This keeps the original Warden turn
-        // order, while making the units already visible in the arena participate every round.
+        // Deployed drones get the first response. Turrets never wait for the Warden's turn: they
+        // engage on their own the moment a player is inside their radius (updateTurretAI).
         if (drone.isActive()) {
             openDroneReaction();
-            return;
-        }
-        Player detectedTarget = detectedTurretTarget();
-        if (detectedTarget != null) {
-            openTurretReaction(detectedTarget);
             return;
         }
 
@@ -841,13 +1048,9 @@ public class Level3Controller {
             }
             case ACTIVATE_TURRET: {
                 turret.activate();
-                if (turret.isActive()) {
-                    Player target = detectedTurretTarget();
-                    if (target != null) openTurretReaction(target);
-                    else wardenLine = "The security turrets rotate, but no operator enters detection range.";
-                } else {
-                    wardenLine = "The Warden attempts to activate a turret, but none remain online.";
-                }
+                wardenLine = turret.isActive()
+                    ? "The security turrets rotate, tracking anything that enters their range."
+                    : "The Warden attempts to activate a turret, but none remain online.";
                 break;
             }
             case DEFENSIVE_SCAN:
@@ -892,40 +1095,6 @@ public class Level3Controller {
             + " because drone " + reactionUnitIndex + " targeted player");
     }
 
-    private Player detectedTurretTarget() {
-        int p1Unit = turret.detectingUnit(player1.centreX(), player1.centreY());
-        int p2Unit = turret.detectingUnit(player2.centreX(), player2.centreY());
-        if (p1Unit < 0 && p2Unit < 0) return null;
-        if (p1Unit < 0) return player2;
-        if (p2Unit < 0) return player1;
-        float p1Distance = turret.distanceSquaredToUnit(p1Unit, player1.centreX(), player1.centreY());
-        float p2Distance = turret.distanceSquaredToUnit(p2Unit, player2.centreX(), player2.centreY());
-        return p1Distance <= p2Distance ? player1 : player2;
-    }
-
-    private void openTurretReaction(Player target) {
-        int unit = turret.detectingUnit(target.centreX(), target.centreY());
-        if (unit < 0) {
-            logTurretRangeMiss();
-            return;
-        }
-        reactionOpen = true;
-        reactionAttackType = EnemyAttackType.TURRET;
-        reactionTargetSide = target == player1 ? 1 : 2;
-        reactionUnitIndex = unit;
-        reactionBlocksDamage = false;
-        pendingTurretTarget = null;
-        pendingTurretDamageTimer = -1f;
-        wardenLine = "A security turret detects " + callSignOf(target) + ". Choose a reaction.";
-        Gdx.app.log("SecurityTurretTrace", "reaction opened for player " + callSignOf(target)
-            + " because turret " + unit + " targeted player");
-    }
-
-    private Player nearerDetectedPlayer() {
-        Player target = detectedTurretTarget();
-        return target == null ? lowerHealth() : target;
-    }
-
     private Player nearestValidPlayer(float x, float y) {
         boolean p1Valid = player1.health > 0f;
         boolean p2Valid = player2.health > 0f;
@@ -941,13 +1110,6 @@ public class Level3Controller {
         return dx * dx + dy * dy;
     }
 
-    private void logTurretRangeMiss() {
-        Gdx.app.log("SecurityTurretTrace", "reaction ignored because player distance > radius"
-            + " p1Distance=" + turret.nearestActiveDistance(player1.centreX(), player1.centreY())
-            + " p2Distance=" + turret.nearestActiveDistance(player2.centreX(), player2.centreY())
-            + " radius=" + SecurityTurretController.DETECTION_RADIUS);
-    }
-
     private void startReactionAttack() {
         Player target = reactionTargetSide == 1 ? player1 : player2;
         if (reactionAttackType == EnemyAttackType.DRONE && drone.isUnitActive(reactionUnitIndex)) {
@@ -960,18 +1122,6 @@ public class Level3Controller {
             wardenLine = "The defense drone lunges at " + callSignOf(target) + ".";
             Gdx.app.log("DefenseDroneTrace", "attack started unit=" + reactionUnitIndex
                 + " targetSide=" + reactionTargetSide + " impactIn=" + pendingDroneDamageTimer);
-        } else if (reactionAttackType == EnemyAttackType.TURRET
-            && turret.isUnitActive(reactionUnitIndex)) {
-            turret.playAiming(reactionUnitIndex, target.centreX(), target.centreY());
-            warden.playAttackFlash();
-            turretAiming = true;
-            wardenAttacked = true;
-            pendingTurretTarget = target;
-            pendingTurretDamageTimer = SecurityTurretController.AIM_DURATION
-                + SecurityTurretController.FIRE_IMPACT_TIME;
-            wardenLine = "The security turret aims at " + callSignOf(target) + ".";
-            Gdx.app.log("SecurityTurretTrace", "aim started unit=" + reactionUnitIndex
-                + " targetSide=" + reactionTargetSide);
         }
     }
 
@@ -985,21 +1135,9 @@ public class Level3Controller {
         return droneDamagedIndex >= 0;
     }
 
-    private boolean damageReactionTurret(float amount) {
-        int before = turret.getActiveCount();
-        turretDamagedIndex = turret.damage(reactionUnitIndex, amount);
-        turretDestroyed = turretDamagedIndex >= 0 && turret.getActiveCount() < before;
-        if (turretDestroyed) {
-            Gdx.app.log("SecurityTurretTrace", "destroyed unit=" + turretDamagedIndex);
-        }
-        return turretDamagedIndex >= 0;
-    }
-
     private boolean reactionSourceActive() {
         return reactionAttackType == EnemyAttackType.DRONE
-            ? drone.isUnitActive(reactionUnitIndex)
-            : reactionAttackType == EnemyAttackType.TURRET
-                && turret.isUnitActive(reactionUnitIndex);
+            && drone.isUnitActive(reactionUnitIndex);
     }
 
     private void clearReactionAttack() {
@@ -1009,32 +1147,6 @@ public class Level3Controller {
         reactionBlocksDamage = false;
         pendingDroneTarget = null;
         pendingDroneDamageTimer = -1f;
-        pendingTurretTarget = null;
-        pendingTurretDamageTimer = -1f;
-    }
-
-    private void updatePendingTurretAttack(float delta) {
-        if (pendingTurretTarget == null || pendingTurretDamageTimer <= 0f) return;
-        pendingTurretDamageTimer -= delta;
-        if (pendingTurretDamageTimer > 0f) return;
-
-        Player target = pendingTurretTarget;
-        pendingTurretTarget = null;
-        pendingTurretDamageTimer = -1f;
-        Gdx.app.log("SecurityTurretTrace", "applying impact to " + callSignOf(target)
-            + " after FIRING began");
-        if (reactionBlocksDamage) {
-            Gdx.app.log("SecurityTurretTrace", "damage blocked targetSide=" + reactionTargetSide);
-        } else {
-            applyWardenDamage(target, 14f);
-            damageAppliedTargetSide = reactionTargetSide;
-            Gdx.app.log("SecurityTurretTrace", "damage applied targetSide=" + reactionTargetSide
-                + " health=" + target.health);
-        }
-        clearReactionAttack();
-        // The initial Warden-turn broadcast starts the client animation. This second snapshot
-        // commits the resulting health change without replaying that animation.
-        broadcast();
     }
 
     private void updatePendingDroneAttack(float delta) {
@@ -1085,7 +1197,6 @@ public class Level3Controller {
     }
 
     private Player higherHealth() { return player1.health >= player2.health ? player1 : player2; }
-    private Player lowerHealth() { return player1.health <= player2.health ? player1 : player2; }
     private Role roleForSide(int side) { return side == 1 ? sideOneRole : sideOneRole.other(); }
     private Role roleOf(Player player) { return player == player1 ? sideOneRole : sideOneRole.other(); }
     private String callSignOf(Player player) { return roleOf(player).callSign(); }
@@ -1098,27 +1209,27 @@ public class Level3Controller {
     private void broadcast() {
         PlayerActionType p1Action = turnManager.getP1Action();
         PlayerActionType p2Action = turnManager.getP2Action();
-        int turretTargetSide = pendingTurretTarget == player1 ? 1
-            : pendingTurretTarget == player2 ? 2 : 0;
         if (hostSession != null) {
             hostSession.send(new Level3TurnStateMessage(turnManager.getPhase(), warden.getState(),
                 warden.getStability(), warden.getDualMeter(), drone.isActive(), turret.isActive(),
                 player1.health, player2.health, bannerSeq, pendingBannerId, wardenLine, breakerLine, listenerLine,
-                wardenAttacked, wardenDamaged, droneAttacked, turretAttacked,
+                wardenAttacked, wardenDamaged, droneAttacked, false,
                 p1Action == null ? -1 : p1Action.ordinal(), p2Action == null ? -1 : p2Action.ordinal(),
                 p1ConsumedSlot, p2ConsumedSlot, warden.getDirectiveConflict(),
                 drone.getActiveCount(), turret.getActiveCount(), droneDamagedIndex, turretDamagedIndex,
-                turretDestroyed, turretAiming, turretTargetSide, memoryRecovered,
+                turretDestroyed, turretAiming, turretEventSide, memoryRecovered,
                 reactionOpen, reactionAttackType == null ? -1 : reactionAttackType.ordinal(),
                 reactionTargetSide, reactionSelectionOrdinal, damageAppliedTargetSide,
-                reactionUnitIndex, restorationStarted, restorationCompleted));
+                turretAiming ? turretEventUnit : reactionUnitIndex,
+                restorationStarted, restorationCompleted));
             if (gun != null) hostSession.send(gun.toMessage());
         }
         wardenAttacked = false;
         wardenDamaged = false;
         droneAttacked = false;
         turretAiming = false;
-        turretAttacked = false;
+        turretEventUnit = -1;
+        turretEventSide = 0;
         droneDamagedIndex = -1;
         turretDamagedIndex = -1;
         turretDestroyed = false;
@@ -1144,8 +1255,6 @@ public class Level3Controller {
         breakerSupported = false;
         pendingDroneTarget = null;
         pendingDroneDamageTimer = -1f;
-        pendingTurretTarget = null;
-        pendingTurretDamageTimer = -1f;
         standDownTimer = -1f;
         endingTimer = -1f;
         endingReady = false;
@@ -1157,9 +1266,14 @@ public class Level3Controller {
         reactionBlocksDamage = false;
         reactionSelectionOrdinal = -1;
         damageAppliedTargetSide = 0;
-        p1InsideTurretRadius = false;
-        p2InsideTurretRadius = false;
-        turretRangeMissLogged = false;
+        turretEventUnit = -1;
+        turretEventSide = 0;
+        turretCombatUnit = -1;
+        playerCombatReady[0] = false;
+        playerCombatReady[1] = false;
+        turretShieldBlock[0] = false;
+        turretShieldBlock[1] = false;
+        Arrays.fill(tracedTurretState, SecurityTurretController.AnimationState.IDLE_ROTATING);
         defenseRestorationInProgress = false;
         restorationStarted = false;
         restorationCompleted = false;
@@ -1172,7 +1286,6 @@ public class Level3Controller {
         wardenDamaged = false;
         droneAttacked = false;
         turretAiming = false;
-        turretAttacked = false;
         droneDamagedIndex = -1;
         turretDamagedIndex = -1;
         turretDestroyed = false;

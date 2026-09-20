@@ -64,6 +64,13 @@
     -fx-text-fill: #8C8C86;
 }
 
+.ending .story-prompt {
+    -fx-font-size: 28px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #35E6FF;
+    -fx-effect: dropshadow(gaussian, rgba(53, 230, 255, 0.52), 20, 0.16, 0, 0);
+}
+
 /* Mission failed: the same window in player 2's magenta */
 
 .story-stage.failed {

@@ -45,6 +45,7 @@ import io.github.fableops.ui.hud.Hud;
 import io.github.fableops.ui.hud.ReactionPanel;
 import io.github.fableops.ui.hud.StoryBanner;
 import io.github.fableops.ui.hud.TurnPanel;
+import io.github.fableops.ui.hud.TurnPromptRenderer;
 
 // Level 3 keeps the existing split-screen exploration foundation. Once both operators cross the
 // marked strip, input switches to the host-authoritative Warden turn encounter.
@@ -58,14 +59,15 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private static final float STATE_INTERVAL = 1f / 20f;
     private static final float FAILURE_SCENE_DELAY = Player.DEATH_DURATION + 0.4f;
     private static final float CORE_DRAW_SIZE = 95f;
+    private static final float RECOVER_BOLT_TRAVEL = 0.6f;
+    private static final float RECOVER_BOLT_BURST = 0.3f;
 
     private enum InputState {
-        PLAYER_FREE_CONTROL,
-        TURN_SELECTION,
-        ITEM_CONFIRMATION,
-        ACTION_EXECUTION,
-        REACTION_SELECTION,
-        WARDEN_TURN
+        NORMAL_GAMEPLAY,
+        TURN_MENU_OPEN,
+        INVENTORY_PREVIEW,
+        ITEM_READY,
+        ACTION_EXECUTION
     }
 
     private final SpriteBatch batch = new SpriteBatch();
@@ -77,6 +79,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private final Gun gun;
     // Owns the icon textures referenced by carried Level 2 InventoryItems.
     private final LootField carriedLootAssets;
+    private final InventoryItem[] itemDefinitions;
+    private final Texture[] ownedItemDefinitionTextures;
     private final Texture coreTexture = new Texture(Gdx.files.internal("UnstableCore.png"));
 
     private final EnemySprites enemySprites = new EnemySprites();
@@ -107,6 +111,15 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private final CodePopupUI logPopup;
 
     private boolean debugCollisionVisible;
+    // Set when a menu closes while LMB/RMB is still held, so that click cannot become an attack.
+    private boolean combatLatched;
+    // The open menu / item popup was started to answer a reaction (a turret alert or a drone hit),
+    // not to queue a turn action. If that reaction ends underneath it, the menu closes itself.
+    private boolean menuIsReaction;
+    private boolean selectedForReaction;
+    private float recoverBoltTimer;
+    private float recoverFromX;
+    private float recoverFromY;
     private boolean missionFailed;
     private boolean bossStarted;
     private boolean endingStarted;
@@ -131,10 +144,9 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private int selectedItemCategory = -1;
     private int selectedItemQuantity;
     private InventoryItem selectedItem;
-    private float itemInfoTimer;
     private String lastPromptLogSignature = "";
     private int shownBannerSeq;
-    private InputState inputState = InputState.PLAYER_FREE_CONTROL;
+    private InputState inputState = InputState.NORMAL_GAMEPLAY;
     private TurnManager.Phase observedPhase = TurnManager.Phase.PLAYER_TURN;
     private TurnManager.Phase remotePhase = TurnManager.Phase.PLAYER_TURN;
     private WardenState remoteWardenState = WardenState.DEFENSE_ACTIVE;
@@ -186,7 +198,25 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         this.inventories = inventories;
         this.gun = gun;
         this.carriedLootAssets = carriedLootAssets;
-        this.activeMenuSide = sideOneRole == Role.BREAKER ? 1 : 2;
+        if (carriedLootAssets != null) {
+            this.ownedItemDefinitionTextures = null;
+            this.itemDefinitions = new InventoryItem[]{
+                carriedLootAssets.itemDefinition("Sidearm"),
+                carriedLootAssets.itemDefinition("Shield Cell"),
+                carriedLootAssets.itemDefinition("Med kit")
+            };
+        } else {
+            Texture sidearmIcon = new Texture(Gdx.files.internal("LootWeapon.png"));
+            Texture shieldIcon = new Texture(Gdx.files.internal("LootShieldCell.png"));
+            Texture medkitIcon = new Texture(Gdx.files.internal("LootMedkit.png"));
+            this.ownedItemDefinitionTextures = new Texture[]{sidearmIcon, shieldIcon, medkitIcon};
+            this.itemDefinitions = new InventoryItem[]{
+                new InventoryItem("Sidearm", "Fires where you face.", sidearmIcon, 0f, true),
+                new InventoryItem("Shield Cell", "A temporary shield charge.", shieldIcon, 0f, true),
+                new InventoryItem("Med kit", "Patches you up.", medkitIcon, 35f, true)
+            };
+        }
+        this.activeMenuSide = 1;
         this.turnPanel = new TurnPanel(hud.font());
         this.equipmentPanel = new EquipmentSelectionPanel(hud.font());
         this.reactionPanelP1 = new ReactionPanel(hud.font());
@@ -268,7 +298,6 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         // The host crossing the strip is authoritative. This also covers a client whose movement
         // snapshot reaches the trigger a frame later than the event-channel state.
         if (!bossStarted) beginEncounter();
-        TurnManager.Phase previousPhase = remotePhase;
         remotePhase = state.getPhase();
         remoteWardenState = state.getWardenState();
         remoteStability = state.getStability();
@@ -283,11 +312,6 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         remoteListenerLine = state.getListenerLine();
         remoteP1Action = actionAt(state.getP1ActionOrdinal());
         remoteP2Action = actionAt(state.getP2ActionOrdinal());
-        if (remotePhase == TurnManager.Phase.RESOLUTION
-            && previousPhase != TurnManager.Phase.RESOLUTION) {
-            playPlayerActionAnimation(player1, remoteP1Action);
-            playPlayerActionAnimation(player2, remoteP2Action);
-        }
         if (remoteP1Action != null) p1Selected = indexOf(actionsFor(1), remoteP1Action);
         if (remoteP2Action != null) p2Selected = indexOf(actionsFor(2), remoteP2Action);
 
@@ -306,22 +330,11 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 droneVisual.playAttackFlash();
             }
         }
-        Player turretTarget = state.getTurretTargetSide() == 1 ? player1
-            : state.getTurretTargetSide() == 2 ? player2 : null;
-        if (state.isTurretAiming() && turretTarget != null) {
-            if (state.getReactionUnitIndex() >= 0) {
-                turretVisual.playAiming(state.getReactionUnitIndex(),
-                    turretTarget.centreX(), turretTarget.centreY());
-            } else {
-                turretVisual.playAiming(turretTarget.centreX(), turretTarget.centreY());
-            }
-        }
-        if (state.isTurretAttacked()) {
-            if (turretTarget != null) {
-                turretVisual.playFiring(turretTarget.centreX(), turretTarget.centreY());
-            } else {
-                turretVisual.playAttackFlash();
-            }
+        // Alert and waiting are derived from positions on both peers. The host announces only the
+        // moment the targeted player is prepared; the mirrored unit then readies, aims and fires
+        // on the same fixed timers as the host's.
+        if (state.isTurretAiming() && state.getTurretTargetSide() != 0) {
+            turretVisual.beginCombat(state.getReactionUnitIndex(), state.getTurretTargetSide());
         }
         if (state.getDroneDamagedIndex() >= 0) {
             droneVisual.playDamaged(state.getDroneDamagedIndex(),
@@ -378,18 +391,6 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         return ordinal >= 0 && ordinal < values.length ? values[ordinal] : null;
     }
 
-    private static void playPlayerActionAnimation(Player player, PlayerActionType action) {
-        if (action == PlayerActionType.BREAKER_WEAPON_ATTACK
-            || action == PlayerActionType.LISTENER_WEAPON_ATTACK) {
-            player.startShooting();
-        } else if (action == PlayerActionType.BREAKER_SHIELD_DEFENSE
-            || action == PlayerActionType.LISTENER_SHIELD_DEFENSE) {
-            player.startShielding();
-        } else if (action != null) {
-            player.startAttack();
-        }
-    }
-
     private void removeConsumedItem(int side, int slot) {
         if (slot < 0) return;
         if (slot == Level3Controller.SHARED_SLOT_INDEX) inventories.removeSharedItem();
@@ -409,15 +410,24 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         boolean overlayWasOpen = storyBanner.isOpen() || logPopup.isOpen();
         storyBanner.handleInput();
         logPopup.handleInput();
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
+            Gdx.app.log("InputTrace", "key=ENTER actionTriggered=false");
+        }
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !equipmentOpen
-            && inputState != InputState.TURN_SELECTION
-            && inputState != InputState.ITEM_CONFIRMATION
+            && inputState != InputState.TURN_MENU_OPEN
+            && inputState != InputState.INVENTORY_PREVIEW
+            && inputState != InputState.ITEM_READY
             && !inventories.anyOpen() && !overlayWasOpen) {
             Gdx.app.exit();
             return;
         }
         if (Gdx.input.isKeyJustPressed(Input.Keys.F1)) debugCollisionVisible = !debugCollisionVisible;
         if (Gdx.input.isKeyJustPressed(Input.Keys.F2)) ui.cycleScale();
+        if (combatLatched && !Gdx.input.isButtonPressed(Input.Buttons.LEFT)
+            && !Gdx.input.isButtonPressed(Input.Buttons.RIGHT)) {
+            combatLatched = false;
+        }
+        recoverBoltTimer = Math.max(0f, recoverBoltTimer - delta);
 
         boolean inputBlocked = missionFailed || bossStarted || storyBanner.isOpen() || logPopup.isOpen();
         inventories.handleInput(isHost || isDebug, !isHost || isDebug, inputBlocked, player1, player2);
@@ -437,22 +447,28 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             if (controller == null) {
                 wardenVisual.update(delta);
                 droneVisual.update(delta);
+                turretVisual.setTrackedPlayers(player1.centreX(), player1.centreY(),
+                    player2.centreX(), player2.centreY());
                 turretVisual.update(delta);
             }
-            if (inputState == InputState.PLAYER_FREE_CONTROL
+            // Input priority: 1) Turn Menu (I, TAB, ENTER, ESC only), 2) inventory item popup
+            // (ENTER/ESC only), 3) free gameplay (T, movement and LMB/RMB combat in updateAs*).
+            if (inputState == InputState.NORMAL_GAMEPLAY
                 && !overlayWasOpen && !storyBanner.isOpen() && !logPopup.isOpen()) {
                 handleTurnMenuRequest();
-            } else if (inputState == InputState.TURN_SELECTION
+                if (inputState == InputState.NORMAL_GAMEPLAY && reactionOpen()) handleReactionInput();
+            } else if (inputState == InputState.TURN_MENU_OPEN
                 && !overlayWasOpen && !storyBanner.isOpen() && !logPopup.isOpen()) {
                 handleTurnInput();
-            } else if (inputState == InputState.REACTION_SELECTION
+            } else if (inputState == InputState.INVENTORY_PREVIEW
                 && !overlayWasOpen && !storyBanner.isOpen() && !logPopup.isOpen()) {
-                handleReactionInput();
-            } else if (inputState == InputState.ITEM_CONFIRMATION
+                handleInventoryPreviewInput();
+            } else if (inputState == InputState.ITEM_READY
                 && !overlayWasOpen && !storyBanner.isOpen() && !logPopup.isOpen()) {
-                handleItemConfirmationInput();
+                handleReadyItemInput();
             }
             if (controller != null) {
+                controller.setTurretAiPaused(storyBanner.isOpen() || logPopup.isOpen());
                 controller.update(delta);
                 syncInputState(0f);
                 consumeControllerBeat();
@@ -463,10 +479,6 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         }
 
         storyBanner.update(delta);
-        if (inputState != InputState.ITEM_CONFIRMATION && itemInfoTimer > 0f) {
-            itemInfoTimer = Math.max(0f, itemInfoTimer - delta);
-            if (itemInfoTimer == 0f) clearSelectedItem();
-        }
         showFailureWhenReady(delta);
         SplitScreen.drawHalves(this, player1, player2);
         drawUI();
@@ -476,8 +488,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         bossStarted = true;
         inventories.closeAll();
         closeEquipmentSelection();
-        activeMenuSide = breakerSide();
-        inputState = InputState.PLAYER_FREE_CONTROL;
+        activeMenuSide = 1;
+        setInputState(InputState.NORMAL_GAMEPLAY, "encounter started");
         observedPhase = TurnManager.Phase.PLAYER_TURN;
         storyBanner.show("// THE FABLE'S LESSON", "THE WARDEN",
             "It was never told to hate them. Only to protect — a directive followed so faithfully, for so long, "
@@ -532,17 +544,19 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     }
 
     private void updateAsDebug(float delta) {
-        boolean actionEnabled = actionInputAllowed();
+        boolean actionEnabled = combatInputEnabled();
         boolean p1Free = movementAllowed(1);
         boolean p2Free = movementAllowed(2);
         if (p1Free) player1.update(delta);
         if (p2Free) player2.update(delta);
-        attack(1, player1, actionEnabled && p1Free && Gdx.input.isButtonPressed(Input.Buttons.LEFT));
-        attack(2, player2, actionEnabled && p2Free && Gdx.input.isButtonPressed(Input.Buttons.RIGHT));
+        startPlayerAttack(1, player1,
+            actionEnabled && p1Free && Gdx.input.isButtonPressed(Input.Buttons.LEFT));
+        startPlayerAttack(2, player2,
+            actionEnabled && p2Free && Gdx.input.isButtonPressed(Input.Buttons.RIGHT));
     }
 
     private void updateAsHost(float delta) {
-        boolean actionEnabled = actionInputAllowed();
+        boolean actionEnabled = combatInputEnabled();
         boolean p1Free = movementAllowed(1);
         if (p1Free) player1.update(delta);
 
@@ -556,8 +570,9 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 actionEnabled && Gdx.input.isButtonPressed(Input.Buttons.RIGHT));
         if (movementAllowed(2)) player2.applyInput(p2Input, delta);
 
-        attack(1, player1, actionEnabled && p1Free && Gdx.input.isButtonPressed(Input.Buttons.LEFT));
-        attack(2, player2, actionEnabled && movementAllowed(2) && p2Input.attack);
+        startPlayerAttack(1, player1,
+            actionEnabled && p1Free && Gdx.input.isButtonPressed(Input.Buttons.LEFT));
+        startPlayerAttack(2, player2, actionEnabled && movementAllowed(2) && p2Input.attack);
         server.pushState(new WorldState(player1, player2));
     }
 
@@ -569,7 +584,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 Gdx.input.isKeyPressed(Input.Keys.S),
                 Gdx.input.isKeyPressed(Input.Keys.A),
                 Gdx.input.isKeyPressed(Input.Keys.D),
-                Gdx.input.isButtonPressed(Input.Buttons.RIGHT))
+                combatInputEnabled() && Gdx.input.isButtonPressed(Input.Buttons.RIGHT))
             : new PlayerInput(false, false, false, false));
         client.pollState().applyTo(player1, player2);
     }
@@ -577,21 +592,56 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private boolean movementAllowed(int side) {
         return !missionFailed && !endingStarted && !inventories.isOpen(side)
             && !storyBanner.isOpen() && !logPopup.isOpen()
-            && (!bossStarted || inputState == InputState.PLAYER_FREE_CONTROL);
+            && !movementBlockedByLevel3Ui();
     }
 
     private boolean actionInputAllowed() {
-        return !bossStarted || inputState == InputState.PLAYER_FREE_CONTROL;
+        return !bossStarted || inputState == InputState.NORMAL_GAMEPLAY;
     }
 
+    // Combat is LMB/RMB only, and only in free gameplay with no menu click still held.
+    private boolean combatInputEnabled() {
+        return actionInputAllowed() && !combatLatched;
+    }
+
+    private boolean movementBlockedByLevel3Ui() {
+        return inputState == InputState.TURN_MENU_OPEN
+            || inputState == InputState.INVENTORY_PREVIEW;
+    }
+
+    private void setInputState(InputState next, String reason) {
+        inputState = next;
+        traceInputState(reason);
+    }
+
+    private void traceInputState(String reason) {
+        Gdx.app.log("Level3InputTrace", reason + " state=" + inputState
+            + " movementEnabled=" + !movementBlockedByLevel3Ui());
+    }
+
+    // MenuInputHandler: every method from here to handleReadyItemInput reads keyboard keys only.
     private void handleTurnInput() {
-        if (inputState != InputState.TURN_SELECTION
-            || (phase() != TurnManager.Phase.PLAYER_TURN && !reactionOpen())) return;
+        if (inputState != InputState.TURN_MENU_OPEN) return;
+        if (menuIsReaction && !reactionOpen()) {
+            // The turret alert ended (the player walked out of range, or it was destroyed).
+            restoreGameplayInput("reaction ended");
+            return;
+        }
+        if (!menuIsReaction && reactionOpen() && localCanRespondToReaction()) {
+            // An alert opened under a normal menu: restart on the reacting player's equipment.
+            openTurnMenu(reactionTargetSide(), true, "reaction opened under turn menu");
+        }
+        if (!menuIsReaction && phase() != TurnManager.Phase.PLAYER_TURN) {
+            // The round moved on under an open menu: never leave movement locked behind it.
+            restoreGameplayInput("turn menu no longer valid");
+            return;
+        }
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+            traceMenuInput("ESC");
             closeTurnMenu();
             return;
         }
-        if (reactionOpen()) {
+        if (menuIsReaction) {
             handleReactionMenuInput();
             return;
         }
@@ -601,69 +651,103 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         }
         if (soloControl()) {
             handleUnifiedSelection();
-        } else if (isHost) {
-            handleSelection(1, Input.Keys.W, Input.Keys.S, Input.Keys.E);
         } else {
-            handleSelection(2, Input.Keys.W, Input.Keys.S, Input.Keys.E);
+            handleSelection(isHost ? 1 : 2);
         }
     }
 
     private void handleTurnMenuRequest() {
-        if (phase() != TurnManager.Phase.PLAYER_TURN || reactionOpen()
-            || !Gdx.input.isKeyJustPressed(Input.Keys.T)) return;
-        int side = soloControl() ? firstUnconfirmedSide() : isHost ? 1 : 2;
-        if (side == 0 || confirmed(side)) return;
-        activeMenuSide = side;
-        inputState = InputState.TURN_SELECTION;
-        String callSign = roleForSide(side).callSign();
-        Gdx.app.log("Level3TurnMenuTrace", "Turn menu opened for player " + callSign);
+        if (!Gdx.input.isKeyJustPressed(Input.Keys.T) || !turnMenuAvailable()) return;
+        if (reactionOpen()) openTurnMenu(reactionTargetSide(), true, "reaction turn menu opened");
+        else openTurnMenu(firstMenuSide(), false, "turn menu opened");
     }
 
-    private int firstUnconfirmedSide() {
-        if (!confirmed(activeMenuSide)) return activeMenuSide;
-        int other = activeMenuSide == 1 ? 2 : 1;
-        return confirmed(other) ? 0 : other;
+    // Single source of truth for "T would open the Turn Menu right now". It gates the T key and the
+    // cyan reminder alike, so the reminder is never on screen when T would do nothing.
+    private boolean turnMenuAvailable() {
+        if (!bossStarted || missionFailed || endingStarted
+            || inputState != InputState.NORMAL_GAMEPLAY
+            || storyBanner.isOpen() || logPopup.isOpen()) return false;
+        if (reactionOpen()) return localCanRespondToReaction();
+        if (phase() != TurnManager.Phase.PLAYER_TURN) return false;
+        return soloControl() ? !(confirmed(1) && confirmed(2)) : !confirmed(isHost ? 1 : 2);
+    }
+
+    // Player 1 unless this keyboard controls both operators and Player 1 has already confirmed.
+    private int firstMenuSide() {
+        if (!soloControl()) return isHost ? 1 : 2;
+        return confirmed(1) && !confirmed(2) ? 2 : 1;
+    }
+
+    // Every open starts from the same cursor: ACTIONS, first row, never a remembered position. A
+    // reaction can only choose carried equipment, so that one opens on the inventory rows.
+    private void openTurnMenu(int side, boolean reaction, String reason) {
+        closeEquipmentSelection();
+        clearSelectedItem();
+        inventories.closeAll();
+        p1Selected = 0;
+        p2Selected = 0;
+        p1InventorySelected = 0;
+        p2InventorySelected = 0;
+        p1InventoryFocus = reaction && side == 1;
+        p2InventoryFocus = reaction && side == 2;
+        activeMenuSide = side;
+        menuIsReaction = reaction;
+        setInputState(InputState.TURN_MENU_OPEN, reason);
+        Gdx.app.log("Level3TurnMenuTrace", "Turn menu opened for player "
+            + roleForSide(side).callSign());
+        traceMenuInput("T");
     }
 
     private void closeTurnMenu() {
+        restoreGameplayInput("turn menu closed");
+    }
+
+    // Forces free gameplay back after a menu, popup or action ends. Movement and combat are derived
+    // from inputState (there is no separate lock flag to forget), so resetting it here is the
+    // whole recovery; nothing relies on what the previous state happened to be.
+    private void restoreGameplayInput(String reason) {
         closeEquipmentSelection();
+        clearSelectedItem();
+        inventories.closeAll();
         p1InventoryFocus = false;
         p2InventoryFocus = false;
-        inputState = reactionOpen() ? InputState.REACTION_SELECTION : InputState.PLAYER_FREE_CONTROL;
+        activeMenuSide = 0;
+        menuIsReaction = false;
+        combatLatched = Gdx.input.isButtonPressed(Input.Buttons.LEFT)
+            || Gdx.input.isButtonPressed(Input.Buttons.RIGHT);
+        setInputState(InputState.NORMAL_GAMEPLAY, reason);
+    }
+
+    private void traceMenuInput(String key) {
+        int side = activeMenuSide;
+        boolean inventory = side != 0 && inventoryFocused(side);
+        int index = side == 1 ? (inventory ? p1InventorySelected : p1Selected)
+            : side == 2 ? (inventory ? p2InventorySelected : p2Selected) : -1;
+        Gdx.app.log("TurnMenuInputTrace", "key=" + key
+            + " currentPlayer=" + (side == 0 ? "NONE" : "PLAYER_" + side)
+            + " category=" + (inventory ? "INVENTORY" : "ACTIONS")
+            + " index=" + index);
     }
 
     private void syncInputState(float delta) {
         TurnManager.Phase current = phase();
         if (reactionOpen()) {
-            if (inputState != InputState.REACTION_SELECTION
-                && inputState != InputState.TURN_SELECTION
-                && inputState != InputState.ITEM_CONFIRMATION) {
-                closeEquipmentSelection();
-                inputState = InputState.REACTION_SELECTION;
-            }
+            if (inputState == InputState.ACTION_EXECUTION) restoreGameplayInput("reaction available");
             return;
-        }
-        if (inputState == InputState.REACTION_SELECTION) {
-            inputState = current == TurnManager.Phase.PLAYER_TURN
-                ? InputState.PLAYER_FREE_CONTROL
-                : current == TurnManager.Phase.RESOLUTION
-                    ? InputState.ACTION_EXECUTION : InputState.WARDEN_TURN;
         }
         if (current != observedPhase) {
             observedPhase = current;
             switch (current) {
                 case RESOLUTION:
                     closeEquipmentSelection();
-                    inputState = InputState.ACTION_EXECUTION;
+                    setInputState(InputState.ACTION_EXECUTION, "operator actions executing");
                     break;
                 case WARDEN_TURN:
-                    closeEquipmentSelection();
-                    inputState = InputState.WARDEN_TURN;
+                    restoreGameplayInput("warden turn gameplay restored");
                     break;
                 case PLAYER_TURN:
-                    closeEquipmentSelection();
-                    activeMenuSide = breakerSide();
-                    inputState = InputState.PLAYER_FREE_CONTROL;
+                    restoreGameplayInput("new player turn");
                     break;
                 default:
                     break;
@@ -671,23 +755,15 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         }
     }
 
+    // ENTER-only fallback for a reaction with no usable equipment: take the hit.
     private void handleReactionInput() {
         if (!reactionOpen() || !localCanRespondToReaction()) return;
-        if (Gdx.input.isKeyJustPressed(Input.Keys.T)) {
-            int side = reactionTargetSide();
-            activeMenuSide = side;
-            p1InventoryFocus = side == 1;
-            p2InventoryFocus = side == 2;
-            inputState = InputState.TURN_SELECTION;
-            Gdx.app.log("Level3TurnMenuTrace", "Turn menu opened for player "
-                + roleForSide(side).callSign());
-            return;
-        }
         boolean[] available = reactionAvailability();
         if (!available[ReactionType.SIDEARM.ordinal()]
             && !available[ReactionType.SHIELD.ordinal()]
             && !available[ReactionType.MEDKIT.ordinal()]
             && Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
+            traceMenuInput("ENTER");
             confirmReaction(ReactionType.NONE);
         }
     }
@@ -699,9 +775,10 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         boolean down = Gdx.input.isKeyJustPressed(Input.Keys.S)
             || Gdx.input.isKeyJustPressed(Input.Keys.DOWN);
         moveInventorySelection(side, up ? -1 : down ? 1 : 0);
-        if (!Gdx.input.isKeyJustPressed(Input.Keys.ENTER)
-            && !Gdx.input.isKeyJustPressed(Input.Keys.E)) return;
+        if (up || down) traceMenuInput(up ? "UP" : "DOWN");
+        if (!Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) return;
 
+        traceMenuInput("ENTER");
         int selected = side == 1 ? p1InventorySelected : p2InventorySelected;
         selectInventoryCategory(side, selected);
     }
@@ -713,39 +790,88 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         return null;
     }
 
-    private void handleItemConfirmationInput() {
+    private void handleInventoryPreviewInput() {
+        if (selectedForReaction && !reactionOpen()) {
+            restoreGameplayInput("reaction ended");
+            return;
+        }
         if (selectedItemCategory < 0 || selectedItemSide == 0) {
-            inputState = InputState.PLAYER_FREE_CONTROL;
+            restoreGameplayInput("invalid inventory preview closed");
             return;
         }
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
-            clearSelectedItem();
-            inputState = reactionOpen() ? InputState.REACTION_SELECTION : InputState.PLAYER_FREE_CONTROL;
+            restoreGameplayInput("inventory preview cancelled");
+            return;
+        }
+        if (!Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) return;
+
+        if (selectedItemQuantity > 0) {
+            setInputState(InputState.ITEM_READY, "inventory preview confirmed");
+            return;
+        }
+
+        boolean unavailableReaction = reactionOpen();
+        restoreGameplayInput("unavailable inventory preview closed");
+        if (unavailableReaction) confirmReaction(ReactionType.NONE);
+    }
+
+    private void handleReadyItemInput() {
+        if (selectedForReaction && !reactionOpen()) {
+            restoreGameplayInput("reaction ended");
+            return;
+        }
+        if (selectedItemCategory < 0 || selectedItemSide == 0) {
+            restoreGameplayInput("item readiness cleared");
+            return;
+        }
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+            restoreGameplayInput("ready item cancelled");
             return;
         }
 
         TurnPanel.InventoryCategory category =
             TurnPanel.InventoryCategory.values()[selectedItemCategory];
         boolean activate = category == TurnPanel.InventoryCategory.SIDEARM
-            ? Gdx.input.isKeyJustPressed(Input.Keys.A)
+            ? Gdx.input.isKeyJustPressed(Input.Keys.X)
             : category == TurnPanel.InventoryCategory.SHIELD
                 ? Gdx.input.isKeyJustPressed(Input.Keys.H)
                 : Gdx.input.isKeyJustPressed(Input.Keys.M);
         if (!activate) return;
+        Gdx.app.log("InputTrace", "key=" + activationKey(category) + " actionTriggered=true");
 
         int side = selectedItemSide;
         int slot = firstPersonalCompatibleSlot(side, actionForCategory(side, category));
         if (slot < 0) return;
         if (reactionOpen()) {
+            // Only the targeted player's activation answers the alert.
+            if (side != reactionTargetSide()) return;
             ReactionType reaction = reactionForCategory(selectedItemCategory);
-            clearSelectedItem();
+            restoreGameplayInput("reaction item activated");
             confirmReaction(reaction);
             return;
         }
 
         PlayerActionType action = actionForCategory(side, category);
+        playReadyItemAnimation(side, category);
         clearSelectedItem();
         confirmAction(side, action, slot);
+    }
+
+    private void playReadyItemAnimation(int side, TurnPanel.InventoryCategory category) {
+        Player player = side == 1 ? player1 : player2;
+        switch (category) {
+            case SIDEARM:
+                player.startShooting();
+                break;
+            case SHIELD:
+                player.startShielding();
+                break;
+            case MEDKIT:
+                player.playHealingFeedback();
+                break;
+            default:
+                break;
+        }
     }
 
     private PlayerActionType actionForCategory(int side, TurnPanel.InventoryCategory category) {
@@ -817,85 +943,67 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     }
 
     private void handleUnifiedSelection() {
-        int other = activeMenuSide == 1 ? 2 : 1;
         boolean switchPressed = Gdx.input.isKeyJustPressed(Input.Keys.TAB)
             || Gdx.input.isKeyJustPressed(Input.Keys.LEFT)
             || Gdx.input.isKeyJustPressed(Input.Keys.RIGHT);
-        if ((switchPressed || confirmed(activeMenuSide)) && !confirmed(other)) {
-            activeMenuSide = other;
+        if (switchPressed) {
+            activeMenuSide = activeMenuSide == 1 ? 2 : 1;
+            traceMenuInput("TAB");
         }
         if (confirmed(activeMenuSide)) return;
 
         if (Gdx.input.isKeyJustPressed(Input.Keys.I)) {
             toggleInventoryFocus(activeMenuSide);
+            traceMenuInput("I");
         }
+        moveSelection(activeMenuSide);
 
-        PlayerActionType[] options = actionsFor(activeMenuSide);
+        if (!Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) return;
+        traceMenuInput("ENTER");
+        confirmSelection(activeMenuSide);
+    }
+
+    private void handleSelection(int side) {
+        if (confirmed(side)) return;
+        if (Gdx.input.isKeyJustPressed(Input.Keys.I)) {
+            toggleInventoryFocus(side);
+            traceMenuInput("I");
+        }
+        moveSelection(side);
+
+        if (!Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) return;
+        traceMenuInput("ENTER");
+        confirmSelection(side);
+    }
+
+    private void moveSelection(int side) {
         boolean up = Gdx.input.isKeyJustPressed(Input.Keys.W)
             || Gdx.input.isKeyJustPressed(Input.Keys.UP);
         boolean down = Gdx.input.isKeyJustPressed(Input.Keys.S)
             || Gdx.input.isKeyJustPressed(Input.Keys.DOWN);
-        if (inventoryFocused(activeMenuSide)) {
-            moveInventorySelection(activeMenuSide, up ? -1 : down ? 1 : 0);
-        } else {
-            int count = options.length;
-            int selected = activeMenuSide == 1 ? p1Selected : p2Selected;
-            selected = Math.max(0, Math.min(count - 1, selected));
-            if (up) selected = (selected + count - 1) % count;
-            if (down) selected = (selected + 1) % count;
-            if (activeMenuSide == 1) p1Selected = selected;
-            else p2Selected = selected;
-        }
-
-        int mouseSide = Gdx.input.isButtonJustPressed(Input.Buttons.LEFT) ? breakerSide()
-            : Gdx.input.isButtonJustPressed(Input.Buttons.RIGHT) ? listenerSide() : 0;
-        int confirmedSide = mouseSide != 0 ? mouseSide : activeMenuSide;
-        boolean confirm = mouseSide != 0 || Gdx.input.isKeyJustPressed(Input.Keys.E)
-            || Gdx.input.isKeyJustPressed(Input.Keys.ENTER);
-        if (!confirm || confirmed(confirmedSide)) return;
-        if (inventoryFocused(confirmedSide)) {
-            int category = confirmedSide == 1 ? p1InventorySelected : p2InventorySelected;
-            selectInventoryCategory(confirmedSide, category);
-            return;
-        }
-        PlayerActionType[] confirmedOptions = actionsFor(confirmedSide);
-        int confirmedSelected = confirmedSide == 1 ? p1Selected : p2Selected;
-        confirmedSelected = Math.max(0, Math.min(confirmedOptions.length - 1, confirmedSelected));
-        beginActionConfirmation(confirmedSide, confirmedOptions[confirmedSelected]);
-    }
-
-    private void handleSelection(int side, int upKey, int downKey, int confirmKey) {
-        if (confirmed(side)) return;
-        Role role = side == 1 ? sideOneRole : sideOneRole.other();
-        if (Gdx.input.isKeyJustPressed(Input.Keys.I)) toggleInventoryFocus(side);
-        PlayerActionType[] options = actionsFor(side);
-        boolean up = Gdx.input.isKeyJustPressed(upKey)
-            || Gdx.input.isKeyJustPressed(Input.Keys.UP);
-        boolean down = Gdx.input.isKeyJustPressed(downKey)
-            || Gdx.input.isKeyJustPressed(Input.Keys.DOWN);
-        int selected = side == 1 ? p1Selected : p2Selected;
         if (inventoryFocused(side)) {
             moveInventorySelection(side, up ? -1 : down ? 1 : 0);
         } else {
-            int count = options.length;
+            int count = actionsFor(side).length;
+            int selected = side == 1 ? p1Selected : p2Selected;
             selected = Math.max(0, Math.min(count - 1, selected));
             if (up) selected = (selected + count - 1) % count;
             if (down) selected = (selected + 1) % count;
             if (side == 1) p1Selected = selected;
             else p2Selected = selected;
         }
+        if (up || down) traceMenuInput(up ? "UP" : "DOWN");
+    }
 
-        boolean confirm = Gdx.input.isKeyJustPressed(confirmKey)
-            || (!isDebug && Gdx.input.isKeyJustPressed(Input.Keys.ENTER))
-            || Gdx.input.isButtonJustPressed(role == Role.BREAKER ? Input.Buttons.LEFT : Input.Buttons.RIGHT);
-        if (!confirm) return;
+    private void confirmSelection(int side) {
         if (inventoryFocused(side)) {
-            int category = side == 1 ? p1InventorySelected : p2InventorySelected;
-            selectInventoryCategory(side, category);
+            selectInventoryCategory(side, side == 1 ? p1InventorySelected : p2InventorySelected);
             return;
         }
-        PlayerActionType action = options[selected];
-        beginActionConfirmation(side, action);
+        PlayerActionType[] options = actionsFor(side);
+        int selected = side == 1 ? p1Selected : p2Selected;
+        selected = Math.max(0, Math.min(options.length - 1, selected));
+        beginActionConfirmation(side, options[selected]);
     }
 
     private boolean inventoryFocused(int side) {
@@ -935,24 +1043,22 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         int[] quantities = inventoryQuantities(side);
         InventoryItem[] representatives = inventoryRepresentatives(side);
         selectedItemSide = side;
+        selectedForReaction = menuIsReaction;
         selectedItemCategory = categoryIndex;
         selectedItemQuantity = quantities[categoryIndex];
         selectedItem = representatives[categoryIndex];
-        itemInfoTimer = 2.75f;
         closeEquipmentSelection();
         p1InventoryFocus = false;
         p2InventoryFocus = false;
-        inputState = selectedItemQuantity > 0
-            ? InputState.ITEM_CONFIRMATION
-            : reactionOpen() ? InputState.REACTION_SELECTION : InputState.PLAYER_FREE_CONTROL;
+        setInputState(InputState.INVENTORY_PREVIEW, "inventory item selected");
     }
 
     private void clearSelectedItem() {
         selectedItemSide = 0;
+        selectedForReaction = false;
         selectedItemCategory = -1;
         selectedItemQuantity = 0;
         selectedItem = null;
-        itemInfoTimer = 0f;
         lastPromptLogSignature = "";
     }
 
@@ -1012,8 +1118,49 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private void confirmAction(int side, PlayerActionType action, int inventorySlot) {
         if (controller != null) controller.confirmLocal(side, action, inventorySlot);
         else clientSession.send(new Level3ActionMessage(action.ordinal(), inventorySlot));
-        activeMenuSide = side == 1 ? 2 : 1;
+        if (action == PlayerActionType.LISTENER_RECOVER_LOGS && !memoryRecovered()
+            && defensesCleared() && (controller == null || confirmed(side))) {
+            playRecoverMemorySequence(side);
+        }
         closeTurnMenu();
+    }
+
+    // Level 2 style golden bolt from the Listener into the Warden. Visual only: it never touches
+    // startPlayerAttack/startShooting or the Gun, so it uses no ammo and starts no combat state.
+    private void playRecoverMemorySequence(int side) {
+        Player listener = side == 1 ? player1 : player2;
+        recoverFromX = listener.centreX();
+        recoverFromY = listener.centreY();
+        recoverBoltTimer = RECOVER_BOLT_TRAVEL + RECOVER_BOLT_BURST;
+        Gdx.app.log("Level3RecoverMemoryTrace", "golden memory bolt started side=" + side
+            + " playerAnimation=" + listener.getAnimationState());
+    }
+
+    private void drawRecoverMemorySequence(ShapeRenderer shape) {
+        float elapsed = RECOVER_BOLT_TRAVEL + RECOVER_BOLT_BURST - recoverBoltTimer;
+        float toX = wardenVisual.centreX();
+        float toY = wardenVisual.centreY();
+        if (elapsed < RECOVER_BOLT_TRAVEL) {
+            float head = elapsed / RECOVER_BOLT_TRAVEL;
+            float tail = Math.max(0f, head - 0.2f);
+            float headX = recoverFromX + (toX - recoverFromX) * head;
+            float headY = recoverFromY + (toY - recoverFromY) * head;
+            float tailX = recoverFromX + (toX - recoverFromX) * tail;
+            float tailY = recoverFromY + (toY - recoverFromY) * tail;
+            shape.setColor(1f, 0.78f, 0.22f, 0.55f);
+            shape.rectLine(tailX, tailY, headX, headY, 14f);
+            shape.setColor(1f, 0.92f, 0.55f, 1f);
+            shape.rectLine(tailX, tailY, headX, headY, 5f);
+            shape.circle(headX, headY, 11f);
+        } else {
+            float burst = (elapsed - RECOVER_BOLT_TRAVEL) / RECOVER_BOLT_BURST;
+            shape.setColor(1f, 0.85f, 0.35f, 0.6f * (1f - burst));
+            shape.circle(toX, toY, 24f + 90f * burst);
+        }
+    }
+
+    private boolean defensesCleared() {
+        return droneVisual.getActiveCount() == 0 && turretVisual.getActiveCount() == 0;
     }
 
     private void closeEquipmentSelection() {
@@ -1058,6 +1205,11 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 if (items[category.ordinal()] == null && itemMatchesCategory(side, item, category)) {
                     items[category.ordinal()] = item;
                 }
+            }
+        }
+        for (TurnPanel.InventoryCategory category : categories) {
+            if (items[category.ordinal()] == null) {
+                items[category.ordinal()] = itemDefinitions[category.ordinal()];
             }
         }
         return items;
@@ -1106,8 +1258,12 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         return 0;
     }
 
-    private void attack(int side, Player player, boolean pressed) {
+    // CombatInputHandler: the only caller of Player.startAttack(). It is fed by LMB/RMB alone (see
+    // updateAs*) and shares no method with the menu handlers, so ENTER can never start an attack.
+    private void startPlayerAttack(int side, Player player, boolean pressed) {
         if (!pressed || !player.startAttack()) return;
+        Gdx.app.log("InputTrace", "key=" + (side == 1 ? "LMB" : "RMB")
+            + " actionTriggered=true");
         brawlSwarm.attackNearest(side, player.centreX(), player.centreY(), ATTACK_RANGE, ATTACK_DAMAGE);
         hackerSwarm.attackNearest(side, player.centreX(), player.centreY(), ATTACK_RANGE, ATTACK_DAMAGE);
     }
@@ -1207,8 +1363,11 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         p2InventoryFocus = false;
         clearSelectedItem();
         closeEquipmentSelection();
-        activeMenuSide = breakerSide();
-        inputState = InputState.PLAYER_FREE_CONTROL;
+        activeMenuSide = 1;
+        recoverBoltTimer = 0f;
+        combatLatched = false;
+        menuIsReaction = false;
+        setInputState(InputState.NORMAL_GAMEPLAY, "level reset");
         observedPhase = TurnManager.Phase.PLAYER_TURN;
         shownBannerSeq = 0;
         missionFailed = false;
@@ -1233,13 +1392,16 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     public void drawHalf(OrthographicCamera camera) {
         world.render(batch, camera);
         world.renderOverlays(shape, camera, bossStarted);
-        if (gun.hasShotToDraw() || turretVisual.hasLaserToDraw()) {
+        if (gun.hasShotToDraw() || turretVisual.hasLaserToDraw()
+            || turretVisual.hasWarningToDraw() || recoverBoltTimer > 0f) {
             Gdx.gl.glEnable(GL20.GL_BLEND);
             Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
             shape.setProjectionMatrix(camera.combined);
             shape.begin(ShapeRenderer.ShapeType.Filled);
             if (gun.hasShotToDraw()) gun.drawShot(shape);
+            if (turretVisual.hasWarningToDraw()) turretVisual.drawWarning(shape);
             if (turretVisual.hasLaserToDraw()) turretVisual.drawLaser(shape);
+            if (recoverBoltTimer > 0f) drawRecoverMemorySequence(shape);
             shape.end();
             Gdx.gl.glDisable(GL20.GL_BLEND);
         }
@@ -1274,14 +1436,14 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         OrthographicCamera uiCamera = ui.camera();
         batch.setProjectionMatrix(uiCamera.combined);
         shape.setProjectionMatrix(uiCamera.combined);
-        hud.drawBanner(shape, batch, ui, TITLE, objective(), null, -1f);
+        TurnPromptRenderer.render(hud, shape, batch, ui, TITLE, objective(), turnMenuAvailable());
         hud.drawPlayerCards(shape, batch, ui, player1, player2, sideOneRole);
         gun.drawHud(shape, batch, hud.font(), ui.width());
 
-        if (bossStarted && inputState == InputState.TURN_SELECTION && !equipmentOpen) {
+        if (bossStarted && inputState == InputState.TURN_MENU_OPEN && !equipmentOpen) {
             int[] p1Quantities = inventoryQuantities(1);
             int[] p2Quantities = inventoryQuantities(2);
-            boolean reactionMenu = reactionOpen();
+            boolean reactionMenu = menuIsReaction;
             turnPanel.render(shape, batch, ui, phase(), wardenState(), stability(), directiveConflict(), dualMeter(),
                 sideOneRole,
                 sideOneRole.callSign(), sideOneRole.other().callSign(), p1Selected, p2Selected,
@@ -1297,44 +1459,22 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 inventories, equipmentSelectedSlot, gun,
                 equipmentSide == 1 ? SplitScreen.ACCENT_P1 : SplitScreen.ACCENT_P2);
         }
-        if (bossStarted && reactionOpen() && inputState == InputState.REACTION_SELECTION
-            && localCanRespondToReaction()
-            && !storyBanner.isOpen() && !logPopup.isOpen()) {
-            int side = reactionTargetSide();
-            Role targetRole = roleForSide(side);
-            String target = targetRole.callSign();
-            ReactionPanel panel = side == 1 ? reactionPanelP1 : reactionPanelP2;
-            boolean[] available = reactionAvailability();
-            boolean hasEquipment = available[ReactionType.SIDEARM.ordinal()]
-                || available[ReactionType.SHIELD.ordinal()]
-                || available[ReactionType.MEDKIT.ordinal()];
-            panel.renderReactionMenuPrompt(batch, ui, side, target, hasEquipment);
-        } else if (!reactionOpen()) {
-            lastPromptLogSignature = "";
-        }
-        if (selectedItemCategory >= 0
-            && (inputState == InputState.ITEM_CONFIRMATION || itemInfoTimer > 0f)) {
+        if (!reactionOpen()) lastPromptLogSignature = "";
+        if (selectedItemCategory >= 0 && inputState == InputState.INVENTORY_PREVIEW) {
             TurnPanel.InventoryCategory category =
                 TurnPanel.InventoryCategory.values()[selectedItemCategory];
             Color accent = selectedItemSide == 1 ? SplitScreen.ACCENT_P1 : SplitScreen.ACCENT_P2;
             inventories.renderItemInfoPopup(shape, batch, ui.width(), selectedItemSide,
                 category.label(), roleForSide(selectedItemSide).callSign(), selectedItemQuantity,
                 selectedItemDescription(category), category != TurnPanel.InventoryCategory.SIDEARM,
-                selectedItem, accent);
-            if (inputState == InputState.ITEM_CONFIRMATION && selectedItemQuantity > 0) {
-                logArmedPrompt(selectedItemSide, category, selectedItemQuantity, true);
-                ReactionPanel panel = selectedItemSide == 1 ? reactionPanelP1 : reactionPanelP2;
-                panel.renderActivationHeader(batch, ui, activationInstruction(category));
-            }
+                selectedItem, selectedItemQuantity > 0, accent);
         }
-        if (bossStarted && phase() == TurnManager.Phase.PLAYER_TURN
-            && inputState == InputState.PLAYER_FREE_CONTROL && !reactionOpen()
-            && !storyBanner.isOpen() && !logPopup.isOpen()) {
-            boolean localActionPending = (isHost || isDebug) && !confirmed(1)
-                || (!isHost || isDebug) && !confirmed(2);
-            if (localActionPending) {
-                reactionPanelP1.renderTurnMenuHeader(batch, ui);
-            }
+        if (selectedItemCategory >= 0 && inputState == InputState.ITEM_READY) {
+            TurnPanel.InventoryCategory category =
+                TurnPanel.InventoryCategory.values()[selectedItemCategory];
+            logArmedPrompt(selectedItemSide, category, selectedItemQuantity, true);
+            ReactionPanel panel = selectedItemSide == 1 ? reactionPanelP1 : reactionPanelP2;
+            panel.renderActivationHeader(batch, ui, activationInstruction(category));
         }
         inventories.render(shape, batch, ui.width(), ui.height(), player1, player2,
             SplitScreen.ACCENT_P1, SplitScreen.ACCENT_P2);
@@ -1354,10 +1494,19 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
 
     private static String activationInstruction(TurnPanel.InventoryCategory category) {
         switch (category) {
-            case SIDEARM: return "PRESS A TO FIRE SIDE ARM";
+            case SIDEARM: return "PRESS X TO FIRE SIDE ARM";
             case SHIELD: return "PRESS H TO ACTIVATE SHIELD";
             case MEDKIT: return "PRESS M TO USE MEDKIT";
             default: return "";
+        }
+    }
+
+    private static String activationKey(TurnPanel.InventoryCategory category) {
+        switch (category) {
+            case SIDEARM: return "X";
+            case SHIELD: return "H";
+            case MEDKIT: return "M";
+            default: return "UNKNOWN";
         }
     }
 
@@ -1471,6 +1620,9 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             turretVisual.dispose();
         }
         if (carriedLootAssets != null) carriedLootAssets.dispose();
+        if (ownedItemDefinitionTextures != null) {
+            for (Texture texture : ownedItemDefinitionTextures) texture.dispose();
+        }
         if (server != null) server.stop();
         if (client != null) client.stop();
         if (hostSession != null) hostSession.stop();

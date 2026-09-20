@@ -31,10 +31,10 @@ public class TurnPanel {
     }
 
     private static final float PANEL_W = 900f;
-    private static final float PANEL_H = 470f;
+    private static final float PANEL_H = 540f;
     private static final float TOP_Y = 840f;
     private static final float COLUMN_W = 410f;
-    private static final float ROW_H = 23f;
+    private static final float ROW_H = 28f;
 
     private static final Color PANEL = new Color(0.03f, 0.04f, 0.05f, 0.88f);
     private static final Color EDGE = new Color(1f, 1f, 1f, 0.1f);
@@ -42,7 +42,7 @@ public class TurnPanel {
     private static final Color TEXT = new Color(0.94f, 0.94f, 0.91f, 1f);
     private static final Color DIM = new Color(0.6f, 0.6f, 0.58f, 1f);
     private static final Color CYAN = new Color(0.35f, 0.92f, 1f, 1f);
-    private static final Color MAGENTA = new Color(1f, 0.16f, 0.43f, 1f);
+    private static final Color WARNING = new Color(1f, 0.34f, 0.58f, 1f);
     private static final Color GREEN = new Color(0.45f, 0.95f, 0.55f, 1f);
     private static final Color STABILITY = new Color(0.35f, 0.92f, 1f, 1f);
     private static final Color CONFLICT = new Color(1f, 0.16f, 0.43f, 1f);
@@ -81,7 +81,7 @@ public class TurnPanel {
         Role p1Role = sideOneRole;
         Role p2Role = sideOneRole.other();
         batch.begin();
-        font.getData().setScale(0.78f);
+        font.getData().setScale(1.0f);
         font.setColor(TEXT);
         font.draw(batch, "WARDEN STATUS: " + state.name().replace('_', ' '),
             x + 20f, y + PANEL_H - 13f);
@@ -89,7 +89,7 @@ public class TurnPanel {
         font.draw(batch, "PLAYER TURN - PRESS ESC TO CLOSE", x + 390f, y + PANEL_H - 13f,
             PANEL_W - 410f, Align.right, false);
 
-        font.getData().setScale(0.65f);
+        font.getData().setScale(0.78f);
         font.setColor(DIM);
         font.draw(batch, "CONTAINMENT STABILITY", x + 20f, y + PANEL_H - 34f);
         font.draw(batch, "DIRECTIVE CONFLICT", x + 310f, y + PANEL_H - 34f);
@@ -103,12 +103,12 @@ public class TurnPanel {
             p2InventorySelected, p2InventoryFocus, p2Quantities, authorizationAllowed);
 
         if (!authorizationAllowed) {
-            font.getData().setScale(0.64f);
-            font.setColor(MAGENTA);
-            font.draw(batch, authorizationLockReason, x + 20f, y + 35f,
+            font.getData().setScale(0.96f);
+            font.setColor(WARNING);
+            font.draw(batch, authorizationLockReason, x + 20f, y + 50f,
                 PANEL_W - 40f, Align.center, false);
         }
-        font.getData().setScale(0.66f);
+        font.getData().setScale(0.88f);
         font.setColor(DIM);
         String controls = soloControl
             ? "W/S SELECT   I ACTIONS/INVENTORY   ENTER CONFIRM   TAB PLAYER   ESC CLOSE"
@@ -122,7 +122,7 @@ public class TurnPanel {
                             boolean confirmed, boolean active, int inventorySelected,
                             boolean inventoryFocus, int[] quantities,
                             boolean authorizationAllowed) {
-        font.getData().setScale(1.15f);
+        font.getData().setScale(1.45f);
         font.setColor(active && !confirmed ? CYAN : TEXT);
         font.draw(batch, (active && !confirmed ? "> " : "  ") + "PLAYER " + side + ": "
             + role.name() + " " + callSign, x, topY);
@@ -132,33 +132,35 @@ public class TurnPanel {
         }
 
         float rowY = topY - ROW_H;
-        font.getData().setScale(0.72f);
+        font.getData().setScale(0.9f);
         font.setColor(DIM);
         font.draw(batch, "ACTIONS", x, rowY);
         rowY -= ROW_H;
 
-        font.getData().setScale(0.92f);
+        font.getData().setScale(1.16f);
         for (int i = 0; i < actions.length; i++) {
             boolean disabled = actions[i] == PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT
                 && !authorizationAllowed;
             boolean selected = active && !confirmed && !inventoryFocus && i == actionSelected;
+            font.getData().setScale(selected ? 1.26f : 1.16f);
             font.setColor(disabled ? DIM : selected ? CYAN : TEXT);
             font.draw(batch, (selected ? "> " : "  ") + actions[i].label()
                 + (disabled ? " [LOCKED]" : ""), x, rowY);
             rowY -= ROW_H;
         }
 
-        // Keep both inventory sections aligned even when one role has fewer actions.
-        rowY = topY - ROW_H * 11f;
-        font.getData().setScale(0.72f);
+        // Inventory follows the final action instead of being pinned near the panel bottom.
+        rowY -= ROW_H * 0.45f;
+        font.getData().setScale(1.0f);
         font.setColor(DIM);
         font.draw(batch, "INVENTORY", x, rowY);
         rowY -= ROW_H;
 
         InventoryCategory[] categories = InventoryCategory.values();
-        font.getData().setScale(0.92f);
+        font.getData().setScale(1.16f);
         for (int i = 0; i < categories.length; i++) {
             boolean selected = active && !confirmed && inventoryFocus && i == inventorySelected;
+            font.getData().setScale(selected ? 1.26f : 1.16f);
             font.setColor(selected ? CYAN : quantities[i] > 0 ? TEXT : DIM);
             font.draw(batch, (selected ? "> " : "  ") + categories[i].label()
                 + " x" + quantities[i], x, rowY);
