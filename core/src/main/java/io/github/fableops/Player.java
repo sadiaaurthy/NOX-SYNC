@@ -17,7 +17,7 @@ public class Player {
     // Same order as the rows in the sheets
     private enum Direction { DOWN, UP, LEFT, RIGHT }
 
-    public enum AnimationState { IDLE, ATTACKING, SHOOTING, SHIELDING }
+    public enum AnimationState { IDLE, MOVING, ATTACKING, SHOOTING, SHIELDING, DAMAGED }
 
     private static final Direction[] DIRECTIONS = Direction.values();
     private static final int SHEET_COLUMNS = 8;
@@ -39,6 +39,7 @@ public class Player {
     // The fall plays once and then stays on its last frame
     public static final float DEATH_DURATION = 0.96f;
     private static final float HURT_FLASH_DURATION = 0.18f;
+    private static final float HEAL_FLASH_DURATION = 0.45f;
     private static final float HURT_TINT_STRENGTH = 0.65f;   // how far green and blue drop at peak flash
 
     public float x, y;
@@ -66,6 +67,7 @@ public class Player {
     private float attackTimer = 0f;
     private float equipmentAnimationTimer = 0f;
     private float hurtVisualTimer = 0f;
+    private float healVisualTimer = 0f;
     private float deathTimer = 0f;
     // Per direction: 0 while its key is up, otherwise the order the keys went down in
     private final int[] pressOrder = new int[DIRECTIONS.length];
@@ -191,6 +193,7 @@ public class Player {
     public void heal(float amount) {
         if (amount <= 0f || health <= 0f) return;
         health = Math.min(MAX_HEALTH, health + amount);
+        playHealingFeedback();
     }
 
     public void takeDamage(float amount) {
@@ -200,9 +203,19 @@ public class Player {
         health = newHealth;
     }
 
+    public void playDamagedFeedback() {
+        hurtVisualTimer = HURT_FLASH_DURATION;
+        if (animationState != AnimationState.SHIELDING) animationState = AnimationState.DAMAGED;
+    }
+
+    public void playHealingFeedback() {
+        healVisualTimer = HEAL_FLASH_DURATION;
+    }
+
     // Returns false while the last swing is still playing
     public boolean startAttack() {
-        if (animationState != AnimationState.IDLE || attackTimer > 0f) return false;
+        if ((animationState != AnimationState.IDLE && animationState != AnimationState.MOVING)
+            || attackTimer > 0f) return false;
         attackTimer = ATTACK_DURATION;
         attackDirection = facing;
         animationState = AnimationState.ATTACKING;
@@ -233,8 +246,11 @@ public class Player {
         } else if ((animationState == AnimationState.SHOOTING
             || animationState == AnimationState.SHIELDING) && equipmentAnimationTimer <= 0f) {
             animationState = AnimationState.IDLE;
+        } else if (animationState == AnimationState.DAMAGED && hurtVisualTimer <= 0f) {
+            animationState = stateTime > 0f ? AnimationState.MOVING : AnimationState.IDLE;
         }
         hurtVisualTimer = Math.max(0f, hurtVisualTimer - delta);
+        healVisualTimer = Math.max(0f, healVisualTimer - delta);
         deathTimer = (health <= 0f) ? deathTimer + delta : 0f;
     }
 
@@ -243,6 +259,7 @@ public class Player {
         equipmentAnimationTimer = 0f;
         animationState = AnimationState.IDLE;
         hurtVisualTimer = 0f;
+        healVisualTimer = 0f;
         deathTimer = 0f;
     }
 
@@ -296,6 +313,9 @@ public class Player {
         else if (dy > 0) facing = Direction.UP;
         else if (dy < 0) facing = Direction.DOWN;
         stateTime = (dx != 0 || dy != 0) ? stateTime + delta : 0f;
+        if (animationState == AnimationState.IDLE || animationState == AnimationState.MOVING) {
+            animationState = (dx != 0 || dy != 0) ? AnimationState.MOVING : AnimationState.IDLE;
+        }
 
         if (dx != 0 && !world.collides(x + dx, y, bounds.footW, bounds.footH, side)) x += dx;
         if (dy != 0 && !world.collides(x, y + dy, bounds.footW, bounds.footH, side)) y += dy;
@@ -316,7 +336,13 @@ public class Player {
 
     // The direction the sprite is drawn facing, sent to the client with the attack timer
     public int getDirection() {
-        return (animationState != AnimationState.IDLE ? attackDirection : facing).ordinal();
+        return usesLockedDirection() ? attackDirection.ordinal() : facing.ordinal();
+    }
+
+    private boolean usesLockedDirection() {
+        return animationState == AnimationState.ATTACKING
+            || animationState == AnimationState.SHOOTING
+            || animationState == AnimationState.SHIELDING;
     }
 
     // Where the player faces, as a unit vector. Shots go this way
@@ -339,9 +365,11 @@ public class Player {
         this.x = x;
         this.y = y;
         facing = DIRECTIONS[direction];
-        if (animationState != AnimationState.SHOOTING && animationState != AnimationState.SHIELDING) {
+        if (animationState != AnimationState.SHOOTING && animationState != AnimationState.SHIELDING
+            && animationState != AnimationState.DAMAGED) {
             attackDirection = facing;
-            animationState = attackTimer > 0f ? AnimationState.ATTACKING : AnimationState.IDLE;
+            animationState = attackTimer > 0f ? AnimationState.ATTACKING
+                : stateTime > 0f ? AnimationState.MOVING : AnimationState.IDLE;
         }
         this.stateTime = stateTime;
         this.attackTimer = attackTimer;
@@ -406,10 +434,12 @@ public class Player {
             death.draw(batch, facing.ordinal(), deathTimer);
             return;
         }
-        float tint = (hurtVisualTimer > 0f)
-            ? 1f - HURT_TINT_STRENGTH * (hurtVisualTimer / HURT_FLASH_DURATION)
-            : 1f;
-        batch.setColor(1f, tint, tint, 1f);
+        float hurtTint = hurtVisualTimer > 0f
+            ? 1f - HURT_TINT_STRENGTH * (hurtVisualTimer / HURT_FLASH_DURATION) : 1f;
+        float healTint = healVisualTimer > 0f
+            ? 0.55f + 0.45f * (1f - healVisualTimer / HEAL_FLASH_DURATION) : 1f;
+        batch.setColor(hurtVisualTimer > 0f ? 1f : healTint, hurtVisualTimer > 0f ? hurtTint : 1f,
+            hurtVisualTimer > 0f ? hurtTint : healTint, 1f);
 
         if (animationState == AnimationState.SHOOTING) {
             sidearm.draw(batch, attackDirection.ordinal(),

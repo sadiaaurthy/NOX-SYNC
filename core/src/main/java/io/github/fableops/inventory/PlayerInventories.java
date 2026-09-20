@@ -140,6 +140,15 @@ public class PlayerInventories {
         uiP2.render(shape, batch, uiWorldW, uiWorldH, inventoryP2, shared, player2, accentP2);
     }
 
+    public void renderItemInfoPopup(ShapeRenderer shape, SpriteBatch batch, float uiWorldW,
+                                    int side, String title, String ownerName, int quantity,
+                                    String description, boolean consumesUse, InventoryItem item,
+                                    Color accent) {
+        InventoryUI ui = side == 1 ? uiP1 : uiP2;
+        ui.renderCarriedItemPopup(shape, batch, uiWorldW, side, title, ownerName, quantity,
+            description, consumesUse, item, accent);
+    }
+
     public void dispose() {
         font.dispose();
     }

@@ -361,4 +361,65 @@ public class InventoryUI {
             font.draw(batch, "[ENTER] USE", right - 200f, promptY);
         }
     }
+
+    // Reuses the carried-item detail typography for Level 3's turn menu. The caller owns the
+    // surrounding panel and batch lifecycle; this method only draws the same information block.
+    public void renderCarriedItemInfo(SpriteBatch batch, String title, String ownerName,
+                                      int quantity, String description, boolean consumesUse,
+                                      float x, float topY, float width, Color accent) {
+        font.getData().setScale(0.95f);
+        font.setColor(ORANGE);
+        font.draw(batch, title, x, topY);
+
+        font.getData().setScale(0.76f);
+        font.setColor(DIM);
+        font.draw(batch, "Owned by: " + ownerName, x, topY - 31f);
+        font.draw(batch, "Quantity: " + quantity, x + width * 0.54f, topY - 31f);
+
+        font.setColor(TEXT);
+        font.draw(batch, description, x, topY - 61f, width, com.badlogic.gdx.utils.Align.left, true);
+        if (consumesUse) {
+            font.setColor(accent);
+            font.draw(batch, "Consumes 1 use", x, topY - 103f);
+        }
+    }
+
+    public void renderCarriedItemPopup(ShapeRenderer shape, SpriteBatch batch,
+                                       float uiWorldW, int side, String title, String ownerName,
+                                       int quantity, String description, boolean consumesUse,
+                                       InventoryItem item,
+                                       Color accent) {
+        float popupW = 500f;
+        float popupH = 170f;
+        float halfW = uiWorldW / 2f;
+        float x = (side == 1 ? 0f : halfW) + (halfW - popupW) / 2f;
+        float y = 190f;
+
+        Gdx.gl.glEnable(GL20.GL_BLEND);
+        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
+        shape.begin(ShapeRenderer.ShapeType.Filled);
+        shape.setColor(PANEL_BG);
+        shape.rect(x, y, popupW, popupH);
+        shape.setColor(accent);
+        shape.rect(x, y + popupH - 4f, popupW, 4f);
+        shape.end();
+        shape.begin(ShapeRenderer.ShapeType.Line);
+        shape.setColor(INNER_LINE);
+        shape.rect(x + 5f, y + 5f, popupW - 10f, popupH - 10f);
+        shape.end();
+
+        batch.begin();
+        float infoX = x + 18f;
+        float infoW = popupW - 36f;
+        if (item != null && item.getIcon() != null) {
+            float iconSize = 96f;
+            batch.draw(item.getIcon(), x + 18f, y + 37f, iconSize, iconSize);
+            infoX += iconSize + 20f;
+            infoW -= iconSize + 20f;
+        }
+        renderCarriedItemInfo(batch, title, ownerName, quantity, description, consumesUse,
+            infoX, y + popupH - 24f, infoW, accent);
+        batch.end();
+        Gdx.gl.glDisable(GL20.GL_BLEND);
+    }
 }
