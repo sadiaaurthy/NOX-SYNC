@@ -4,6 +4,7 @@ import com.badlogic.gdx.Gdx;
 
 import io.github.fableops.Player;
 import io.github.fableops.inventory.PlayerInventories;
+import io.github.fableops.inventory.network.InventoryTransferMessage;
 import io.github.fableops.level2.loot.LootDrop;
 import io.github.fableops.level2.loot.LootField;
 import io.github.fableops.level2.network.CoreStateMessage;
@@ -44,8 +45,23 @@ public class Level2Controller {
             } else if ("LOOT_INTERACT".equals(type)) {
                 LootInteractRequestMessage msg = LootInteractRequestMessage.deserialize(body);
                 Gdx.app.postRunnable(() -> interactLoot(2, msg.getLootId()));
+            } else if ("INVENTORY_TRANSFER".equals(type)) {
+                InventoryTransferMessage msg = InventoryTransferMessage.deserialize(body);
+                if (msg.getPlayerSide() == 2) {
+                    Gdx.app.postRunnable(() -> transferInventory(msg));
+                }
             }
         };
+    }
+
+    public void transferInventory(InventoryTransferMessage message) {
+        if (!inventories.applyTransfer(message.getPlayerSide(), message.isFromShared(),
+            message.getPersonalSlot())) return;
+        gun.giveTo(inventories.currentHolder("Sidearm"));
+        if (hostSession != null) {
+            hostSession.send(message);
+            hostSession.send(gun.toMessage());
+        }
     }
 
     public void interactCore(int playerId) {

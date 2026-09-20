@@ -11,6 +11,7 @@ import io.github.fableops.Role;
 import io.github.fableops.inventory.Inventory;
 import io.github.fableops.inventory.InventoryItem;
 import io.github.fableops.inventory.PlayerInventories;
+import io.github.fableops.inventory.network.InventoryTransferMessage;
 import io.github.fableops.level2.Gun;
 import io.github.fableops.level3.network.Level3ActionMessage;
 import io.github.fableops.level3.network.Level3TurnStateMessage;
@@ -20,6 +21,10 @@ import io.github.fableops.network.session.MessageListener;
 // Host-authoritative turn encounter. The Warden has no health: operator actions stabilize its
 // directive, expose the old safety decision, and finally prove dual authorization.
 public class Level3Controller {
+
+    // Encodes the existing shared slot in the same integer carried by Level3ActionMessage. Personal
+    // inventory indices remain 0..24, so older messages and UI selections keep their meaning.
+    public static final int SHARED_SLOT_INDEX = Inventory.CAPACITY;
 
     public static final int BANNER_MEMORY = 0;
     public static final int BANNER_CONFLICT = 1;
@@ -34,6 +39,7 @@ public class Level3Controller {
     private static final float WARDEN_TURN_DELAY = 1.4f;
     private static final float RESOLUTION_DELAY = 1.9f;
     private static final float STAND_DOWN_DELAY = 3.5f;
+    private static final float ENDING_DELAY = 2.0f;
 
     private final HostSession hostSession;
     private final PlayerInventories inventories;
@@ -53,8 +59,14 @@ public class Level3Controller {
     private boolean p2Braced;
     private boolean listenerProtected;
     private boolean breakerSupported;
+    private Player pendingDroneTarget;
+    private float pendingDroneDamageTimer = -1f;
+    private Player pendingTurretTarget;
+    private float pendingTurretDamageTimer = -1f;
     private float standDownTimer = -1f;
+    private float endingTimer = -1f;
     private boolean endingReady;
+    private boolean memoryRecovered;
 
     private int bannerSeq;
     private int pendingBannerId = -1;
@@ -65,9 +77,11 @@ public class Level3Controller {
     private boolean wardenAttacked;
     private boolean wardenDamaged;
     private boolean droneAttacked;
+    private boolean turretAiming;
     private boolean turretAttacked;
     private int droneDamagedIndex = -1;
     private int turretDamagedIndex = -1;
+    private boolean turretDestroyed;
     private int p1ConsumedSlot = -1;
     private int p2ConsumedSlot = -1;
     private int p1SelectedItemSlot = -1;
@@ -98,6 +112,17 @@ public class Level3Controller {
     public String getWardenLine() { return wardenLine; }
     public String getBreakerLine() { return breakerLine; }
     public String getListenerLine() { return listenerLine; }
+    public boolean isMemoryRecovered() { return memoryRecovered; }
+
+    public boolean isAuthorizationAllowed() {
+        return defensesCleared() && memoryRecovered;
+    }
+
+    public String authorizationLockReason() {
+        if (!defensesCleared()) return "Restore Authorization requires all defenses disabled";
+        if (!memoryRecovered) return "Restore Authorization requires recovered memory";
+        return "";
+    }
 
     public void startEncounter() {
         drone.spawnAll();
@@ -111,8 +136,7 @@ public class Level3Controller {
     }
 
     public static boolean hasSidearm(PlayerInventories inventories, Gun gun, int side) {
-        return gun != null && gun.getOwner() == side && gun.hasAmmo()
-            && hasNamedItem(inventories, side, "Sidearm");
+        return gun != null && hasNamedItem(inventories, side, "Sidearm");
     }
 
     public static boolean hasShield(PlayerInventories inventories, int side) {
@@ -121,7 +145,7 @@ public class Level3Controller {
             InventoryItem item = inv.get(i);
             if (item != null && isShieldItem(item)) return true;
         }
-        return false;
+        return isShieldItem(inventories.sharedItem());
     }
 
     public static boolean hasMedkit(PlayerInventories inventories, int side) {
@@ -130,12 +154,15 @@ public class Level3Controller {
             InventoryItem item = inv.get(i);
             if (item != null && item.isConsumable()) return true;
         }
-        return false;
+        InventoryItem shared = inventories.sharedItem();
+        return shared != null && shared.isConsumable();
     }
 
     public static boolean requiresEquipment(PlayerActionType action) {
         return action == PlayerActionType.BREAKER_WEAPON_ATTACK
+            || action == PlayerActionType.LISTENER_WEAPON_ATTACK
             || action == PlayerActionType.BREAKER_SHIELD_DEFENSE
+            || action == PlayerActionType.LISTENER_SHIELD_DEFENSE
             || action == PlayerActionType.USE_MEDKIT;
     }
 
@@ -143,8 +170,10 @@ public class Level3Controller {
         if (item == null) return false;
         switch (action) {
             case BREAKER_WEAPON_ATTACK:
+            case LISTENER_WEAPON_ATTACK:
                 return "Sidearm".equalsIgnoreCase(item.getName());
             case BREAKER_SHIELD_DEFENSE:
+            case LISTENER_SHIELD_DEFENSE:
                 return isShieldItem(item);
             case USE_MEDKIT:
                 return item.isConsumable();
@@ -159,7 +188,14 @@ public class Level3Controller {
         for (int i = 0; i < Inventory.CAPACITY; i++) {
             if (itemSupportsAction(action, inv.get(i))) return i;
         }
+        if (itemSupportsAction(action, inventories.sharedItem())) return SHARED_SLOT_INDEX;
         return -1;
+    }
+
+    public static InventoryItem itemAt(PlayerInventories inventories, int side, int slot) {
+        return slot == SHARED_SLOT_INDEX
+            ? inventories.sharedItem()
+            : inventories.forPlayer(side).get(slot);
     }
 
     public static PlayerActionType[] availableActions(PlayerInventories inventories, Gun gun,
@@ -169,24 +205,33 @@ public class Level3Controller {
             actions.add(PlayerActionType.BREAKER_PHYSICAL_STRIKE);
             if (hasSidearm(inventories, gun, side)) actions.add(PlayerActionType.BREAKER_WEAPON_ATTACK);
             actions.add(PlayerActionType.BREAKER_DISABLE_DRONE);
-            actions.add(PlayerActionType.BREAKER_REPAIR_MECHANISM);
-            actions.add(PlayerActionType.BREAKER_PROTECT_LISTENER);
             if (hasShield(inventories, side)) actions.add(PlayerActionType.BREAKER_SHIELD_DEFENSE);
+            actions.add(PlayerActionType.BREAKER_PROTECT_LISTENER);
+            actions.add(PlayerActionType.BREAKER_REPAIR_MECHANISM);
         } else {
             actions.add(PlayerActionType.LISTENER_SCAN_WARDEN);
             actions.add(PlayerActionType.LISTENER_REDUCE_SUBROUTINE);
             actions.add(PlayerActionType.LISTENER_RECOVER_LOGS);
             actions.add(PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT);
+            if (hasSidearm(inventories, gun, side)) actions.add(PlayerActionType.LISTENER_WEAPON_ATTACK);
+            if (hasShield(inventories, side)) actions.add(PlayerActionType.LISTENER_SHIELD_DEFENSE);
             actions.add(PlayerActionType.LISTENER_SUPPORT_BREAKER);
+            if (hasMedkit(inventories, side)) actions.add(PlayerActionType.USE_MEDKIT);
         }
-        if (hasMedkit(inventories, side)) actions.add(PlayerActionType.USE_MEDKIT);
         return actions.toArray(new PlayerActionType[0]);
     }
 
     public MessageListener asMessageListener() {
         return (type, body) -> {
-            if (!"LEVEL3_ACTION".equals(type)) return;
             try {
+                if ("INVENTORY_TRANSFER".equals(type)) {
+                    InventoryTransferMessage msg = InventoryTransferMessage.deserialize(body);
+                    if (msg.getPlayerSide() == 2) {
+                        Gdx.app.postRunnable(() -> transferInventory(msg));
+                    }
+                    return;
+                }
+                if (!"LEVEL3_ACTION".equals(type)) return;
                 Level3ActionMessage msg = Level3ActionMessage.deserialize(body);
                 int ordinal = msg.getActionOrdinal();
                 PlayerActionType[] actions = PlayerActionType.values();
@@ -196,6 +241,16 @@ public class Level3Controller {
                 // Malformed event-channel input must not take down the render thread.
             }
         };
+    }
+
+    public void transferInventory(InventoryTransferMessage message) {
+        if (!inventories.applyTransfer(message.getPlayerSide(), message.isFromShared(),
+            message.getPersonalSlot())) return;
+        if (gun != null) gun.giveTo(inventories.currentHolder("Sidearm"));
+        if (hostSession != null) {
+            hostSession.send(message);
+            if (gun != null) hostSession.send(gun.toMessage());
+        }
     }
 
     public void confirmLocal(int side, PlayerActionType action) {
@@ -210,8 +265,12 @@ public class Level3Controller {
         } else if (!Arrays.asList(availableActions(inventories, gun, side, role)).contains(action)) {
             return;
         }
+        if (action == PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT) {
+            logAuthorizationValidation();
+            if (!isAuthorizationAllowed()) return;
+        }
         if (requiresEquipment(action)) {
-            InventoryItem selected = inventories.forPlayer(side).get(inventorySlot);
+            InventoryItem selected = itemAt(inventories, side, inventorySlot);
             if (!itemSupportsAction(action, selected)) return;
         } else {
             inventorySlot = -1;
@@ -234,16 +293,36 @@ public class Level3Controller {
         warden.update(delta);
         drone.update(delta);
         turret.update(delta);
+        if (turret.consumeFiringStarted()) {
+            turretAttacked = true;
+            broadcast();
+        }
+        updatePendingDroneAttack(delta);
+        updatePendingTurretAttack(delta);
 
         if (standDownTimer > 0f) {
             standDownTimer -= delta;
             if (standDownTimer <= 0f) {
+                WardenState before = warden.getState();
                 warden.setState(WardenState.STAND_DOWN);
                 drone.setCalm(true);
                 turret.setCalm(true);
-                endingReady = true;
+                endingTimer = ENDING_DELAY;
                 standDownTimer = -1f;
+                Gdx.app.log("Level3EndingTrace", "Warden blue restoration: wardenState before="
+                    + before + " wardenState after=" + warden.getState()
+                    + " endingReady=" + endingReady
+                    + " hostility=" + warden.getDirectiveConflict());
                 broadcast();
+            }
+            return;
+        }
+        if (endingTimer > 0f) {
+            endingTimer -= delta;
+            if (endingTimer <= 0f) {
+                endingReady = true;
+                endingTimer = -1f;
+                Gdx.app.log("Level3EndingTrace", "endingReady=true state=" + warden.getState());
             }
             return;
         }
@@ -305,22 +384,39 @@ public class Level3Controller {
         breakerSupported = listenerAction == PlayerActionType.LISTENER_SUPPORT_BREAKER;
         int breakerSlot = p1IsBreaker ? p1SelectedItemSlot : p2SelectedItemSlot;
         int listenerSlot = p1IsBreaker ? p2SelectedItemSlot : p1SelectedItemSlot;
+        boolean memoryWasRecovered = memoryRecovered;
         breakerLine = resolvePlayerAction(breakerAction, breaker, breakerSlot);
         listenerLine = resolvePlayerAction(listenerAction, listener, listenerSlot);
-        advanceStateIfNeeded();
+        boolean memoryRecoveredThisTurn = !memoryWasRecovered && memoryRecovered;
+        if (!memoryRecoveredThisTurn) advanceStateIfNeeded();
 
-        boolean coordinated = warden.getState() == WardenState.DIRECTIVE_CONFLICT
-            && breakerAction == PlayerActionType.BREAKER_REPAIR_MECHANISM
-            && listenerAction == PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT;
-        if (coordinated) {
-            warden.setDualMeter(warden.getDualMeter() + 50f);
-            warden.setDirectiveConflict(warden.getDirectiveConflict() - 15f);
-            if (warden.getDualMeter() >= DUAL_CAP) {
-                warden.setState(WardenState.DUAL_AUTHORIZATION);
-                queueBanner(BANNER_DUAL);
-                standDownTimer = STAND_DOWN_DELAY;
-            }
+        boolean authorizationRequested = listenerAction == PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT;
+        if (authorizationRequested) {
+            logAuthorizationValidation();
+            if (isAuthorizationAllowed()) beginRestoration("defenses cleared and memory recovered");
         }
+    }
+
+    private void logAuthorizationValidation() {
+        Gdx.app.log("Level3EndingTrace", "Before Restore Authorization: remaining drones="
+            + drone.getActiveCount() + " remaining turrets=" + turret.getActiveCount()
+            + " memoryRecovered=" + memoryRecovered
+            + " authorizationAllowed=" + isAuthorizationAllowed()
+            + " hostility=" + warden.getDirectiveConflict()
+            + " state=" + warden.getState());
+    }
+
+    private void beginRestoration(String reason) {
+        if (warden.getState() == WardenState.DUAL_AUTHORIZATION || warden.getState().isStoodDown()) return;
+        WardenState before = warden.getState();
+        warden.setDualMeter(DUAL_CAP);
+        warden.setState(WardenState.DUAL_AUTHORIZATION);
+        wardenDamaged = false;
+        queueBanner(BANNER_DUAL);
+        standDownTimer = STAND_DOWN_DELAY;
+        Gdx.app.log("Level3EndingTrace", "After authorization success (" + reason
+            + "): wardenState before=" + before + " wardenState after=" + warden.getState()
+            + " endingReady=" + endingReady + " hostility=" + warden.getDirectiveConflict());
     }
 
     private void advanceStateIfNeeded() {
@@ -329,11 +425,13 @@ public class Level3Controller {
             && (warden.getStability() >= STABILITY_MEMORY
                 || warden.getDirectiveConflict() <= DIRECTIVE_MEMORY)) {
             warden.setState(WardenState.MEMORY_RECOVERY);
+            wardenDamaged = false;
             queueBanner(BANNER_MEMORY);
         } else if (state == WardenState.MEMORY_RECOVERY
             && (warden.getStability() >= STABILITY_CONFLICT
                 || warden.getDirectiveConflict() <= DIRECTIVE_CONFLICT)) {
             warden.setState(WardenState.DIRECTIVE_CONFLICT);
+            wardenDamaged = false;
             queueBanner(BANNER_CONFLICT);
         }
     }
@@ -353,10 +451,11 @@ public class Level3Controller {
                         : hitWarden ? "; the Warden's outer shell absorbs the blow."
                         : ", but no target remains in reach.");
             }
-            case BREAKER_WEAPON_ATTACK: {
-                self.startAttack();
+            case BREAKER_WEAPON_ATTACK:
+            case LISTENER_WEAPON_ATTACK: {
+                self.startShooting();
                 int side = self == player1 ? 1 : 2;
-                InventoryItem selected = inventories.forPlayer(side).get(inventorySlot);
+                InventoryItem selected = itemAt(inventories, side, inventorySlot);
                 if (!itemSupportsAction(action, selected) || !hasSidearm(inventories, gun, side)
                     || !gun.useTurnBasedRound()) {
                     return name + " finds the recovered sidearm empty.";
@@ -390,8 +489,9 @@ public class Level3Controller {
                 addProgress(4f, 5f);
                 return name + " " + action.flavorVerb() + ".";
             case BREAKER_SHIELD_DEFENSE:
-                self.startAttack();
-                return useShield(self, inventorySlot);
+            case LISTENER_SHIELD_DEFENSE:
+                self.startShielding();
+                return useShield(self, inventorySlot, action);
             case LISTENER_SCAN_WARDEN:
                 self.startAttack();
                 addProgress(7f, 6f);
@@ -403,8 +503,22 @@ public class Level3Controller {
                 return name + " " + action.flavorVerb() + ".";
             case LISTENER_RECOVER_LOGS:
                 self.startAttack();
+                if (!defensesCleared()) {
+                    return name + " cannot recover the Warden's memory while defenses remain online.";
+                }
+                if (memoryRecovered) return name + " confirms the recovered Warden memory.";
+                memoryRecovered = true;
                 addProgress(6f, 7f);
-                return name + " " + action.flavorVerb() + ".";
+                if (warden.getState() == WardenState.DEFENSE_ACTIVE) {
+                    warden.setState(WardenState.MEMORY_RECOVERY);
+                    wardenDamaged = false;
+                    queueBanner(BANNER_MEMORY);
+                } else {
+                    queueBanner(BANNER_LOG);
+                }
+                Gdx.app.log("Level3EndingTrace", "Recover Memory succeeded memoryRecovered=true"
+                    + " state=" + warden.getState());
+                return name + " recovers the Warden's memory record. Authorization is now available.";
             case LISTENER_AUTHORIZATION_ATTEMPT:
                 self.startAttack();
                 addProgress(6f, 5f);
@@ -441,78 +555,81 @@ public class Level3Controller {
         return drone.isActive() ? damageDrone(damage) : damageTurret(damage);
     }
 
+    private boolean defensesCleared() {
+        return drone.getActiveCount() == 0 && turret.getActiveCount() == 0;
+    }
+
     private boolean damageDrone(float damage) {
         int before = drone.getActiveCount();
         droneDamagedIndex = drone.damage(damage);
+        if (droneDamagedIndex >= 0) {
+            Gdx.app.log("Level3EndingTrace", "remaining drones=" + drone.getActiveCount()
+                + " remaining turrets=" + turret.getActiveCount());
+        }
         return droneDamagedIndex >= 0 && (before > 0);
     }
 
     private boolean damageTurret(float damage) {
         int before = turret.getActiveCount();
         turretDamagedIndex = turret.damage(damage);
+        turretDestroyed = turretDamagedIndex >= 0 && turret.getActiveCount() < before;
+        if (turretDamagedIndex >= 0) {
+            Gdx.app.log("Level3EndingTrace", "remaining drones=" + drone.getActiveCount()
+                + " remaining turrets=" + turret.getActiveCount());
+        }
         return turretDamagedIndex >= 0 && (before > 0);
     }
 
     private String useItem(Player self) {
         int side = self == player1 ? 1 : 2;
-        Inventory inv = inventories.forPlayer(side);
-        String name = callSignOf(self);
-        for (int i = 0; i < Inventory.CAPACITY; i++) {
-            InventoryItem item = inv.get(i);
-            if (item != null && item.isConsumable()) {
-                self.heal(item.getHealAmount());
-                inv.remove(i);
-                recordConsumedSlot(side, i);
-                return name + " uses the " + item.getName() + " and restores health.";
-            }
-        }
+        int medkitSlot = firstCompatibleSlot(inventories, side, PlayerActionType.USE_MEDKIT);
+        if (medkitSlot >= 0) return useMedkit(self, medkitSlot);
         return useShield(self);
     }
 
     private String useMedkit(Player self, int slot) {
         int side = self == player1 ? 1 : 2;
-        Inventory inv = inventories.forPlayer(side);
-        InventoryItem item = inv.get(slot);
+        InventoryItem item = itemAt(inventories, side, slot);
         String name = callSignOf(self);
         if (!itemSupportsAction(PlayerActionType.USE_MEDKIT, item)) {
             return name + " has no selected medical supplies.";
         }
         self.heal(item.getHealAmount());
-        inv.remove(slot);
+        removeItemAt(side, slot);
         recordConsumedSlot(side, slot);
         return name + " uses the " + item.getName() + " and restores health.";
     }
 
     private String useShield(Player self) {
         int side = self == player1 ? 1 : 2;
-        Inventory inv = inventories.forPlayer(side);
-        String name = callSignOf(self);
-        for (int i = 0; i < Inventory.CAPACITY; i++) {
-            InventoryItem item = inv.get(i);
-            if (item != null && isShieldItem(item)) {
-                inv.remove(i);
-                recordConsumedSlot(side, i);
-                if (side == 1) p1Braced = true;
-                else p2Braced = true;
-                return name + " braces with the " + item.getName() + ".";
-            }
-        }
-        return name + " has no usable gear.";
+        int slot = firstCompatibleSlot(inventories, side,
+            roleForSide(side) == Role.BREAKER
+                ? PlayerActionType.BREAKER_SHIELD_DEFENSE
+                : PlayerActionType.LISTENER_SHIELD_DEFENSE);
+        return slot >= 0
+            ? useShield(self, slot, roleForSide(side) == Role.BREAKER
+                ? PlayerActionType.BREAKER_SHIELD_DEFENSE
+                : PlayerActionType.LISTENER_SHIELD_DEFENSE)
+            : callSignOf(self) + " has no usable gear.";
     }
 
-    private String useShield(Player self, int slot) {
+    private String useShield(Player self, int slot, PlayerActionType action) {
         int side = self == player1 ? 1 : 2;
-        Inventory inv = inventories.forPlayer(side);
-        InventoryItem item = inv.get(slot);
+        InventoryItem item = itemAt(inventories, side, slot);
         String name = callSignOf(self);
-        if (!itemSupportsAction(PlayerActionType.BREAKER_SHIELD_DEFENSE, item)) {
+        if (!itemSupportsAction(action, item)) {
             return name + " has no selected shield equipment.";
         }
-        inv.remove(slot);
+        removeItemAt(side, slot);
         recordConsumedSlot(side, slot);
         if (side == 1) p1Braced = true;
         else p2Braced = true;
         return name + " braces with the " + item.getName() + ".";
+    }
+
+    private void removeItemAt(int side, int slot) {
+        if (slot == SHARED_SLOT_INDEX) inventories.removeSharedItem();
+        else inventories.forPlayer(side).remove(slot);
     }
 
     private static boolean hasNamedItem(PlayerInventories inventories, int side, String name) {
@@ -521,7 +638,8 @@ public class Level3Controller {
             InventoryItem item = inv.get(i);
             if (item != null && name.equalsIgnoreCase(item.getName())) return true;
         }
-        return false;
+        InventoryItem shared = inventories.sharedItem();
+        return shared != null && name.equalsIgnoreCase(shared.getName());
     }
 
     private void recordConsumedSlot(int side, int slot) {
@@ -530,12 +648,21 @@ public class Level3Controller {
     }
 
     private static boolean isShieldItem(InventoryItem item) {
-        return "Shield Cell".equals(item.getName()) || "Rare Plating".equals(item.getName());
+        if (item == null) return false;
+        String name = item.getName();
+        return "Shield".equalsIgnoreCase(name) || "Shield Cell".equalsIgnoreCase(name)
+            || "Rare Plating".equalsIgnoreCase(name);
     }
 
     private void resolveWardenAction() {
         if (warden.getState() == WardenState.DUAL_AUTHORIZATION || warden.getState().isStoodDown()) {
             wardenLine = "The Warden holds position.";
+            return;
+        }
+        if (defensesCleared()) {
+            wardenLine = memoryRecovered
+                ? "The Warden's defenses are offline; recovered memory awaits authorization."
+                : "The Warden's defenses are offline; its memory archive is exposed.";
             return;
         }
 
@@ -548,19 +675,29 @@ public class Level3Controller {
                 droneAttacked = true;
                 wardenAttacked = true;
                 Player target = higherHealth();
-                applyWardenDamage(target, 9f);
+                pendingDroneTarget = target;
+                pendingDroneDamageTimer = DefenseDroneController.ATTACK_IMPACT_TIME;
                 wardenLine = "The Warden " + action.flavorVerb() + "; it intercepts " + callSignOf(target) + ".";
                 break;
             }
             case ACTIVATE_TURRET: {
                 turret.activate();
-                turret.playAttackFlash();
-                warden.playAttackFlash();
-                turretAttacked = true;
-                wardenAttacked = true;
-                Player target = lowerHealth();
-                applyWardenDamage(target, 14f);
-                wardenLine = "The Warden " + action.flavorVerb() + "; it fires on " + callSignOf(target) + ".";
+                if (turret.isActive()) {
+                    Player target = lowerHealth();
+                    Gdx.app.log("SecurityTurretTrace", "target chosen=" + callSignOf(target)
+                        + " position=(" + target.centreX() + ", " + target.centreY() + ")");
+                    turret.playAiming(target.centreX(), target.centreY());
+                    warden.playAttackFlash();
+                    turretAiming = true;
+                    wardenAttacked = true;
+                    pendingTurretTarget = target;
+                    pendingTurretDamageTimer = SecurityTurretController.AIM_DURATION
+                        + SecurityTurretController.FIRE_IMPACT_TIME;
+                    wardenLine = "The Warden " + action.flavorVerb() + "; it fires on "
+                        + callSignOf(target) + ".";
+                } else {
+                    wardenLine = "The Warden attempts to activate a turret, but none remain online.";
+                }
                 break;
             }
             case DEFENSIVE_SCAN:
@@ -586,6 +723,35 @@ public class Level3Controller {
             default:
                 break;
         }
+    }
+
+    private void updatePendingTurretAttack(float delta) {
+        if (pendingTurretTarget == null || pendingTurretDamageTimer <= 0f) return;
+        pendingTurretDamageTimer -= delta;
+        if (pendingTurretDamageTimer > 0f) return;
+
+        Player target = pendingTurretTarget;
+        pendingTurretTarget = null;
+        pendingTurretDamageTimer = -1f;
+        Gdx.app.log("SecurityTurretTrace", "applying impact to " + callSignOf(target)
+            + " after FIRING began");
+        applyWardenDamage(target, 14f);
+        // The initial Warden-turn broadcast starts the client animation. This second snapshot
+        // commits the resulting health change without replaying that animation.
+        broadcast();
+    }
+
+    private void updatePendingDroneAttack(float delta) {
+        if (pendingDroneTarget == null || pendingDroneDamageTimer <= 0f) return;
+        pendingDroneDamageTimer -= delta;
+        if (pendingDroneDamageTimer > 0f) return;
+
+        Player target = pendingDroneTarget;
+        pendingDroneTarget = null;
+        pendingDroneDamageTimer = -1f;
+        applyWardenDamage(target, 9f);
+        // The attack event already started the animation on both peers; this only commits damage.
+        broadcast();
     }
 
     private void applyWardenDamage(Player target, float base) {
@@ -627,6 +793,8 @@ public class Level3Controller {
     private void broadcast() {
         PlayerActionType p1Action = turnManager.getP1Action();
         PlayerActionType p2Action = turnManager.getP2Action();
+        int turretTargetSide = pendingTurretTarget == player1 ? 1
+            : pendingTurretTarget == player2 ? 2 : 0;
         if (hostSession != null) {
             hostSession.send(new Level3TurnStateMessage(turnManager.getPhase(), warden.getState(),
                 warden.getStability(), warden.getDualMeter(), drone.isActive(), turret.isActive(),
@@ -634,15 +802,18 @@ public class Level3Controller {
                 wardenAttacked, wardenDamaged, droneAttacked, turretAttacked,
                 p1Action == null ? -1 : p1Action.ordinal(), p2Action == null ? -1 : p2Action.ordinal(),
                 p1ConsumedSlot, p2ConsumedSlot, warden.getDirectiveConflict(),
-                drone.getActiveCount(), turret.getActiveCount(), droneDamagedIndex, turretDamagedIndex));
+                drone.getActiveCount(), turret.getActiveCount(), droneDamagedIndex, turretDamagedIndex,
+                turretDestroyed, turretAiming, turretTargetSide, memoryRecovered));
             if (gun != null) hostSession.send(gun.toMessage());
         }
         wardenAttacked = false;
         wardenDamaged = false;
         droneAttacked = false;
+        turretAiming = false;
         turretAttacked = false;
         droneDamagedIndex = -1;
         turretDamagedIndex = -1;
+        turretDestroyed = false;
         p1ConsumedSlot = -1;
         p2ConsumedSlot = -1;
     }
@@ -659,8 +830,14 @@ public class Level3Controller {
         p2Braced = false;
         listenerProtected = false;
         breakerSupported = false;
+        pendingDroneTarget = null;
+        pendingDroneDamageTimer = -1f;
+        pendingTurretTarget = null;
+        pendingTurretDamageTimer = -1f;
         standDownTimer = -1f;
+        endingTimer = -1f;
         endingReady = false;
+        memoryRecovered = false;
         bannerSeq = 0;
         pendingBannerId = -1;
         wardenLine = "";
@@ -669,9 +846,11 @@ public class Level3Controller {
         wardenAttacked = false;
         wardenDamaged = false;
         droneAttacked = false;
+        turretAiming = false;
         turretAttacked = false;
         droneDamagedIndex = -1;
         turretDamagedIndex = -1;
+        turretDestroyed = false;
         p1ConsumedSlot = -1;
         p2ConsumedSlot = -1;
         p1SelectedItemSlot = -1;

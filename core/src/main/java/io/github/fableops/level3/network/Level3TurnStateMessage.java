@@ -42,6 +42,10 @@ public class Level3TurnStateMessage extends NetworkMessage {
     private final int turretCount;
     private final int droneDamagedIndex;
     private final int turretDamagedIndex;
+    private final boolean turretDestroyed;
+    private final boolean turretAiming;
+    private final int turretTargetSide;
+    private final boolean memoryRecovered;
 
     public Level3TurnStateMessage(TurnManager.Phase phase, WardenState wardenState, float stability,
                                   float dualMeter, boolean droneActive, boolean turretActive,
@@ -51,7 +55,43 @@ public class Level3TurnStateMessage extends NetworkMessage {
                                   boolean turretAttacked, int p1ActionOrdinal, int p2ActionOrdinal,
                                   int p1ConsumedSlot, int p2ConsumedSlot, float directiveConflict,
                                   int droneCount, int turretCount, int droneDamagedIndex,
-                                  int turretDamagedIndex) {
+                                  int turretDamagedIndex, boolean turretDestroyed) {
+        this(phase, wardenState, stability, dualMeter, droneActive, turretActive, healthP1,
+            healthP2, bannerSeq, bannerId, wardenLine, breakerLine, listenerLine, wardenAttacked,
+            wardenDamaged, droneAttacked, turretAttacked, p1ActionOrdinal, p2ActionOrdinal,
+            p1ConsumedSlot, p2ConsumedSlot, directiveConflict, droneCount, turretCount,
+            droneDamagedIndex, turretDamagedIndex, turretDestroyed, false, 0, false);
+    }
+
+    public Level3TurnStateMessage(TurnManager.Phase phase, WardenState wardenState, float stability,
+                                  float dualMeter, boolean droneActive, boolean turretActive,
+                                  float healthP1, float healthP2, int bannerSeq, int bannerId,
+                                  String wardenLine, String breakerLine, String listenerLine,
+                                  boolean wardenAttacked, boolean wardenDamaged, boolean droneAttacked,
+                                  boolean turretAttacked, int p1ActionOrdinal, int p2ActionOrdinal,
+                                  int p1ConsumedSlot, int p2ConsumedSlot, float directiveConflict,
+                                  int droneCount, int turretCount, int droneDamagedIndex,
+                                  int turretDamagedIndex, boolean turretDestroyed,
+                                  boolean turretAiming, int turretTargetSide) {
+        this(phase, wardenState, stability, dualMeter, droneActive, turretActive, healthP1,
+            healthP2, bannerSeq, bannerId, wardenLine, breakerLine, listenerLine, wardenAttacked,
+            wardenDamaged, droneAttacked, turretAttacked, p1ActionOrdinal, p2ActionOrdinal,
+            p1ConsumedSlot, p2ConsumedSlot, directiveConflict, droneCount, turretCount,
+            droneDamagedIndex, turretDamagedIndex, turretDestroyed, turretAiming,
+            turretTargetSide, false);
+    }
+
+    public Level3TurnStateMessage(TurnManager.Phase phase, WardenState wardenState, float stability,
+                                  float dualMeter, boolean droneActive, boolean turretActive,
+                                  float healthP1, float healthP2, int bannerSeq, int bannerId,
+                                  String wardenLine, String breakerLine, String listenerLine,
+                                  boolean wardenAttacked, boolean wardenDamaged, boolean droneAttacked,
+                                  boolean turretAttacked, int p1ActionOrdinal, int p2ActionOrdinal,
+                                  int p1ConsumedSlot, int p2ConsumedSlot, float directiveConflict,
+                                  int droneCount, int turretCount, int droneDamagedIndex,
+                                  int turretDamagedIndex, boolean turretDestroyed,
+                                  boolean turretAiming, int turretTargetSide,
+                                  boolean memoryRecovered) {
         this.phase = phase;
         this.wardenState = wardenState;
         this.stability = stability;
@@ -78,6 +118,10 @@ public class Level3TurnStateMessage extends NetworkMessage {
         this.turretCount = turretCount;
         this.droneDamagedIndex = droneDamagedIndex;
         this.turretDamagedIndex = turretDamagedIndex;
+        this.turretDestroyed = turretDestroyed;
+        this.turretAiming = turretAiming;
+        this.turretTargetSide = turretTargetSide;
+        this.memoryRecovered = memoryRecovered;
     }
 
     public TurnManager.Phase getPhase() { return phase; }
@@ -132,6 +176,14 @@ public class Level3TurnStateMessage extends NetworkMessage {
 
     public int getTurretDamagedIndex() { return turretDamagedIndex; }
 
+    public boolean isTurretDestroyed() { return turretDestroyed; }
+
+    public boolean isTurretAiming() { return turretAiming; }
+
+    public int getTurretTargetSide() { return turretTargetSide; }
+
+    public boolean isMemoryRecovered() { return memoryRecovered; }
+
     @Override
     public String getType() { return "LEVEL3_TURN_STATE"; }
 
@@ -143,7 +195,9 @@ public class Level3TurnStateMessage extends NetworkMessage {
             + escape(listenerLine) + ";" + bit(wardenAttacked) + ";" + bit(wardenDamaged) + ";"
             + bit(droneAttacked) + ";" + bit(turretAttacked) + ";" + p1ActionOrdinal + ";"
             + p2ActionOrdinal + ";" + p1ConsumedSlot + ";" + p2ConsumedSlot + ";" + directiveConflict + ";"
-            + droneCount + ";" + turretCount + ";" + droneDamagedIndex + ";" + turretDamagedIndex;
+            + droneCount + ";" + turretCount + ";" + droneDamagedIndex + ";" + turretDamagedIndex + ";"
+            + bit(turretDestroyed) + ";" + bit(turretAiming) + ";" + turretTargetSide + ";"
+            + bit(memoryRecovered);
     }
 
     public static Level3TurnStateMessage deserialize(String body) {
@@ -157,12 +211,18 @@ public class Level3TurnStateMessage extends NetworkMessage {
         int turretCount = p.length > 23 ? Integer.parseInt(p[23]) : (p[5].equals("1") ? 1 : 0);
         int droneDamagedIndex = p.length > 24 ? Integer.parseInt(p[24]) : -1;
         int turretDamagedIndex = p.length > 25 ? Integer.parseInt(p[25]) : -1;
+        boolean turretDestroyed = p.length > 26
+            ? p[26].equals("1") : turretDamagedIndex >= turretCount;
+        boolean turretAiming = p.length > 27 && p[27].equals("1");
+        int turretTargetSide = p.length > 28 ? Integer.parseInt(p[28]) : 0;
+        boolean memoryRecovered = p.length > 29 && p[29].equals("1");
         return new Level3TurnStateMessage(TurnManager.Phase.valueOf(p[0]), WardenState.valueOf(p[1]),
             Float.parseFloat(p[2]), Float.parseFloat(p[3]), p[4].equals("1"), p[5].equals("1"),
             Float.parseFloat(p[6]), Float.parseFloat(p[7]), Integer.parseInt(p[8]), Integer.parseInt(p[9]),
             p[10], p[11], p[12], p[13].equals("1"), p[14].equals("1"), p[15].equals("1"), p[16].equals("1"),
             p1Action, p2Action, p1Consumed, p2Consumed, directiveConflict,
-            droneCount, turretCount, droneDamagedIndex, turretDamagedIndex);
+            droneCount, turretCount, droneDamagedIndex, turretDamagedIndex, turretDestroyed,
+            turretAiming, turretTargetSide, memoryRecovered);
     }
 
     private static int bit(boolean b) { return b ? 1 : 0; }

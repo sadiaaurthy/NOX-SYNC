@@ -47,7 +47,7 @@ public class Gun {
     private static final Color RED = new Color(1f, 0.33f, 0.33f, 1f);
     private static final Color ORANGE = new Color(1f, 0.6f, 0.2f, 1f);
 
-    private int owner = 0; // player id, 0 until someone picks it up
+    private int owner = 0; // current personal-inventory holder; 0 while unclaimed or shared
     private int magazine = MAGAZINE;
     private int spare = START_SPARE;
     private boolean ammoCacheCollected = false;
@@ -92,7 +92,7 @@ public class Gun {
     // action. This reuses the weapon and ammunition collected in Level 2 instead of inventing a
     // second equipment model for the Warden encounter.
     public boolean useTurnBasedRound() {
-        if (owner == 0 || (magazine == 0 && spare == 0)) return false;
+        if (magazine == 0 && spare == 0) return false;
         if (magazine == 0) {
             int rounds = Math.min(MAGAZINE, spare);
             magazine = rounds;

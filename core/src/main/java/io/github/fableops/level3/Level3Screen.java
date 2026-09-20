@@ -18,6 +18,7 @@ import io.github.fableops.Role;
 import io.github.fableops.SwarmController;
 import io.github.fableops.inventory.Inventory;
 import io.github.fableops.inventory.PlayerInventories;
+import io.github.fableops.inventory.network.InventoryTransferMessage;
 import io.github.fableops.level2.Gun;
 import io.github.fableops.level2.loot.LootField;
 import io.github.fableops.level2.network.GunStateMessage;
@@ -125,6 +126,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private float remoteStability;
     private float remoteDirectiveConflict = 100f;
     private float remoteDualMeter;
+    private boolean remoteMemoryRecovered;
     private PlayerActionType remoteP1Action;
     private PlayerActionType remoteP2Action;
     private String remoteWardenLine = "";
@@ -184,6 +186,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             wardenVisual = controller.getWarden();
             droneVisual = controller.getDrone();
             turretVisual = controller.getTurret();
+            inventories.setTransferHandler((side, fromShared, slot) -> controller.transferInventory(
+                new InventoryTransferMessage(side, fromShared, slot)));
             if (hostSession != null) hostSession.setListener(story.wrap(controller.asMessageListener()));
         } else {
             controller = null;
@@ -192,6 +196,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             wardenVisual = new WardenController(wardenAnchor[0], wardenAnchor[1]);
             droneVisual = new DefenseDroneController(droneAnchor[0], droneAnchor[1]);
             turretVisual = new SecurityTurretController(world.getTurretGroundPoints());
+            inventories.setTransferHandler((side, fromShared, slot) -> clientSession.send(
+                new InventoryTransferMessage(side, fromShared, slot)));
             clientSession.setListener(story.wrap((type, body) ->
                 Gdx.app.postRunnable(() -> onHostMessage(type, body))));
         }
@@ -208,6 +214,12 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             case "GUN_STATE":
                 gun.apply(GunStateMessage.deserialize(body));
                 break;
+            case "INVENTORY_TRANSFER": {
+                InventoryTransferMessage transfer = InventoryTransferMessage.deserialize(body);
+                inventories.applyTransfer(transfer.getPlayerSide(), transfer.isFromShared(),
+                    transfer.getPersonalSlot());
+                break;
+            }
             case "LEVEL3_ENDING":
                 beginEnding();
                 break;
@@ -236,16 +248,23 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         // The host crossing the strip is authoritative. This also covers a client whose movement
         // snapshot reaches the trigger a frame later than the event-channel state.
         if (!bossStarted) beginEncounter();
+        TurnManager.Phase previousPhase = remotePhase;
         remotePhase = state.getPhase();
         remoteWardenState = state.getWardenState();
         remoteStability = state.getStability();
         remoteDirectiveConflict = state.getDirectiveConflict();
         remoteDualMeter = state.getDualMeter();
+        remoteMemoryRecovered = state.isMemoryRecovered();
         remoteWardenLine = state.getWardenLine();
         remoteBreakerLine = state.getBreakerLine();
         remoteListenerLine = state.getListenerLine();
         remoteP1Action = actionAt(state.getP1ActionOrdinal());
         remoteP2Action = actionAt(state.getP2ActionOrdinal());
+        if (remotePhase == TurnManager.Phase.RESOLUTION
+            && previousPhase != TurnManager.Phase.RESOLUTION) {
+            playPlayerActionAnimation(player1, remoteP1Action);
+            playPlayerActionAnimation(player2, remoteP2Action);
+        }
         if (remoteP1Action != null) p1Selected = indexOf(actionsFor(1), remoteP1Action);
         if (remoteP2Action != null) p2Selected = indexOf(actionsFor(2), remoteP2Action);
 
@@ -258,23 +277,34 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         if (state.isWardenAttacked()) wardenVisual.playAttackFlash();
         if (state.isWardenDamaged()) wardenVisual.playDamagedFlash();
         if (state.isDroneAttacked()) droneVisual.playAttackFlash();
-        if (state.isTurretAttacked()) turretVisual.playAttackFlash();
+        Player turretTarget = state.getTurretTargetSide() == 1 ? player1
+            : state.getTurretTargetSide() == 2 ? player2 : null;
+        if (state.isTurretAiming() && turretTarget != null) {
+            turretVisual.playAiming(turretTarget.centreX(), turretTarget.centreY());
+        }
+        if (state.isTurretAttacked()) {
+            if (turretTarget != null) {
+                turretVisual.playFiring(turretTarget.centreX(), turretTarget.centreY());
+            } else {
+                turretVisual.playAttackFlash();
+            }
+        }
         if (state.getDroneDamagedIndex() >= 0) {
             droneVisual.playDamaged(state.getDroneDamagedIndex(),
                 state.getDroneDamagedIndex() >= state.getDroneCount());
         }
         if (state.getTurretDamagedIndex() >= 0) {
-            turretVisual.playDamaged(state.getTurretDamagedIndex(),
-                state.getTurretDamagedIndex() >= state.getTurretCount());
+            turretVisual.playDamaged(state.getTurretDamagedIndex(), state.isTurretDestroyed());
         }
         boolean calm = remoteWardenState.isStoodDown();
         droneVisual.setCalm(calm);
         turretVisual.setCalm(calm);
+        if (calm) storyBanner.close();
 
         player1.health = state.getHealthP1();
         player2.health = state.getHealthP2();
-        if (state.getP1ConsumedSlot() >= 0) inventories.forPlayer(1).remove(state.getP1ConsumedSlot());
-        if (state.getP2ConsumedSlot() >= 0) inventories.forPlayer(2).remove(state.getP2ConsumedSlot());
+        removeConsumedItem(1, state.getP1ConsumedSlot());
+        removeConsumedItem(2, state.getP2ConsumedSlot());
         if (state.getBannerSeq() > shownBannerSeq) {
             shownBannerSeq = state.getBannerSeq();
             showProgressBeat(state.getBannerId());
@@ -285,6 +315,24 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private static PlayerActionType actionAt(int ordinal) {
         PlayerActionType[] values = PlayerActionType.values();
         return ordinal >= 0 && ordinal < values.length ? values[ordinal] : null;
+    }
+
+    private static void playPlayerActionAnimation(Player player, PlayerActionType action) {
+        if (action == PlayerActionType.BREAKER_WEAPON_ATTACK
+            || action == PlayerActionType.LISTENER_WEAPON_ATTACK) {
+            player.startShooting();
+        } else if (action == PlayerActionType.BREAKER_SHIELD_DEFENSE
+            || action == PlayerActionType.LISTENER_SHIELD_DEFENSE) {
+            player.startShielding();
+        } else if (action != null) {
+            player.startAttack();
+        }
+    }
+
+    private void removeConsumedItem(int side, int slot) {
+        if (slot < 0) return;
+        if (slot == Level3Controller.SHARED_SLOT_INDEX) inventories.removeSharedItem();
+        else inventories.forPlayer(side).remove(slot);
     }
 
     private void syncDrones(int count) {
@@ -336,6 +384,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 controller.update(delta);
                 syncInputState(0f);
                 consumeControllerBeat();
+                if (wardenState().isStoodDown()) storyBanner.close();
                 if (controller.consumeEndingReady()) beginEnding();
             }
             checkForDeath();
@@ -569,6 +618,14 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     }
 
     private void beginActionConfirmation(int side, PlayerActionType action) {
+        if (action == PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT) {
+            boolean allowed = authorizationAllowed();
+            Gdx.app.log("Level3EndingTrace", "Before Restore Authorization: remaining drones="
+                + droneVisual.getActiveCount() + " remaining turrets=" + turretVisual.getActiveCount()
+                + " memoryRecovered=" + memoryRecovered()
+                + " authorizationAllowed=" + allowed);
+            if (!allowed) return;
+        }
         if (Level3Controller.requiresEquipment(action)) {
             int firstSlot = Level3Controller.firstCompatibleSlot(inventories, side, action);
             if (firstSlot < 0) return;
@@ -603,11 +660,12 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     }
 
     private int nextCompatibleSlot(int direction) {
-        Inventory inventory = inventories.forPlayer(equipmentSide);
         int slot = equipmentSelectedSlot;
-        for (int i = 0; i < Inventory.CAPACITY; i++) {
-            slot = (slot + direction + Inventory.CAPACITY) % Inventory.CAPACITY;
-            if (Level3Controller.itemSupportsAction(equipmentAction, inventory.get(slot))) return slot;
+        int slotCount = Inventory.CAPACITY + 1;
+        for (int i = 0; i < slotCount; i++) {
+            slot = (slot + direction + slotCount) % slotCount;
+            if (Level3Controller.itemSupportsAction(equipmentAction,
+                Level3Controller.itemAt(inventories, equipmentSide, slot))) return slot;
         }
         return equipmentSelectedSlot;
     }
@@ -729,6 +787,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         remoteStability = 0f;
         remoteDirectiveConflict = 100f;
         remoteDualMeter = 0f;
+        remoteMemoryRecovered = false;
         remoteP1Action = null;
         remoteP2Action = null;
         remoteWardenLine = "";
@@ -764,12 +823,13 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     public void drawHalf(OrthographicCamera camera) {
         world.render(batch, camera);
         world.renderOverlays(shape, camera, bossStarted);
-        if (gun.hasShotToDraw()) {
+        if (gun.hasShotToDraw() || turretVisual.hasLaserToDraw()) {
             Gdx.gl.glEnable(GL20.GL_BLEND);
             Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
             shape.setProjectionMatrix(camera.combined);
             shape.begin(ShapeRenderer.ShapeType.Filled);
-            gun.drawShot(shape);
+            if (gun.hasShotToDraw()) gun.drawShot(shape);
+            if (turretVisual.hasLaserToDraw()) turretVisual.drawLaser(shape);
             shape.end();
             Gdx.gl.glDisable(GL20.GL_BLEND);
         }
@@ -813,12 +873,13 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 sideOneRole,
                 sideOneRole.callSign(), sideOneRole.other().callSign(), p1Selected, p2Selected,
                 confirmed(1), confirmed(2), actionsFor(1), actionsFor(2), activeMenuSide, soloControl(),
+                authorizationAllowed(), authorizationLockReason(),
                 wardenLine(), breakerLine(), listenerLine());
         }
         if (equipmentOpen) {
             Role role = equipmentSide == 1 ? sideOneRole : sideOneRole.other();
             equipmentPanel.render(shape, batch, ui, equipmentSide, role.name(), equipmentAction,
-                inventories.forPlayer(equipmentSide), equipmentSelectedSlot, gun,
+                inventories, equipmentSelectedSlot, gun,
                 equipmentSide == 1 ? SplitScreen.ACCENT_P1 : SplitScreen.ACCENT_P2);
         }
         inventories.render(shape, batch, ui.width(), ui.height(), player1, player2,
@@ -845,6 +906,25 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
 
     private float directiveConflict() {
         return controller != null ? controller.getWarden().getDirectiveConflict() : remoteDirectiveConflict;
+    }
+
+    private boolean authorizationAllowed() {
+        if (controller != null) return controller.isAuthorizationAllowed();
+        return droneVisual.getActiveCount() == 0 && turretVisual.getActiveCount() == 0
+            && remoteMemoryRecovered;
+    }
+
+    private boolean memoryRecovered() {
+        return controller != null ? controller.isMemoryRecovered() : remoteMemoryRecovered;
+    }
+
+    private String authorizationLockReason() {
+        if (controller != null) return controller.authorizationLockReason();
+        if (droneVisual.getActiveCount() != 0 || turretVisual.getActiveCount() != 0) {
+            return "Restore Authorization requires all defenses disabled";
+        }
+        if (!remoteMemoryRecovered) return "Restore Authorization requires recovered memory";
+        return "";
     }
 
     private String wardenLine() { return controller != null ? controller.getWardenLine() : remoteWardenLine; }

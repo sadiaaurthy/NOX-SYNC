@@ -22,7 +22,8 @@ import io.github.fableops.ui.UiViewport;
 public class TurnPanel {
 
     private static final float PANEL_W = 900f;
-    private static final float PANEL_H = 330f;
+    // The Listener can expose eight actions when all Level 2 equipment is available.
+    private static final float PANEL_H = 390f;
     private static final float TOP_Y = 840f;
     private static final float COLUMN_W = 380f;
     private static final float ROW_H = 29f;
@@ -52,6 +53,7 @@ public class TurnPanel {
                        boolean p1Confirmed, boolean p2Confirmed,
                        PlayerActionType[] p1Actions, PlayerActionType[] p2Actions,
                        int activeMenuSide, boolean soloControl,
+                       boolean authorizationAllowed, String authorizationLockReason,
                        String wardenLine, String breakerLine, String listenerLine) {
         if (phase != TurnManager.Phase.PLAYER_TURN) {
             renderCompact(shape, batch, ui, phase, wardenLine, breakerLine, listenerLine);
@@ -99,9 +101,16 @@ public class TurnPanel {
         switch (phase) {
             case PLAYER_TURN: {
                 drawColumn(batch, x + 20f, y + PANEL_H - 82f, "BREAKER — " + breakerCallSign,
-                    breakerActions, breakerSelected, breakerConfirmed, breakerActive);
+                    breakerActions, breakerSelected, breakerConfirmed, breakerActive, true);
                 drawColumn(batch, x + PANEL_W / 2f + 20f, y + PANEL_H - 82f, "LISTENER — " + listenerCallSign,
-                    listenerActions, listenerSelected, listenerConfirmed, listenerActive);
+                    listenerActions, listenerSelected, listenerConfirmed, listenerActive,
+                    authorizationAllowed);
+                if (!authorizationAllowed) {
+                    font.getData().setScale(0.68f);
+                    font.setColor(MAGENTA);
+                    font.draw(batch, authorizationLockReason, x + 20f, y + 37f,
+                        PANEL_W - 40f, Align.center, false);
+                }
                 font.getData().setScale(0.72f);
                 font.setColor(DIM);
                 String controls = soloControl
@@ -181,7 +190,8 @@ public class TurnPanel {
     }
 
     private void drawColumn(SpriteBatch batch, float x, float topY, String callSign, PlayerActionType[] actions,
-                            int selected, boolean confirmed, boolean active) {
+                            int selected, boolean confirmed, boolean active,
+                            boolean authorizationAllowed) {
         int count = actions.length;
 
         font.getData().setScale(1.4f);
@@ -195,9 +205,11 @@ public class TurnPanel {
         float rowY = topY - ROW_H;
         font.getData().setScale(1.15f);
         for (int i = 0; i < count; i++) {
-            String label = actions[i].label();
+            boolean disabled = actions[i] == PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT
+                && !authorizationAllowed;
+            String label = actions[i].label() + (disabled ? " [LOCKED]" : "");
             boolean isSelected = (i == selected);
-            font.setColor(confirmed ? DIM : (active && isSelected ? CYAN : DIM));
+            font.setColor(disabled ? DIM : confirmed ? DIM : (active && isSelected ? CYAN : DIM));
             String prefix = (!confirmed && active && isSelected) ? "> " : "   ";
             font.draw(batch, prefix + label, x, rowY);
             rowY -= ROW_H;

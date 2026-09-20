@@ -8,6 +8,7 @@ import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.Animation;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
+import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 
 // Stationary defenses select deterministic, collision-validated ground points. A turret's visible
 // base always draws on its assigned groundY; attack and damage animations never displace it.
@@ -24,9 +25,14 @@ public class SecurityTurretController {
     private static final int ROW_CALM = 3;
     private static final float MAX_HEALTH = 30f;
     private static final float FRAME_DURATION = 0.09f;
+    public static final float AIM_DURATION = 0.45f;
+    public static final float FIRING_DURATION = COLUMNS * FRAME_DURATION;
+    public static final float FIRE_IMPACT_TIME = 6f * FRAME_DURATION;
     private static final float FLASH_DURATION = COLUMNS * FRAME_DURATION;
     private static final long FORMATION_SEED = 0x545552524554534CL;
     private static final int ALPHA_THRESHOLD = 20;
+
+    public enum AnimationState { IDLE_ROTATING, AIMING, FIRING, DAMAGED, DESTROYED }
 
     private static final class Unit {
         float x;
@@ -35,9 +41,14 @@ public class SecurityTurretController {
         boolean active;
         boolean destroying;
         boolean disabled;
+        AnimationState animationState = AnimationState.IDLE_ROTATING;
         float animTime;
-        float attackTimer;
+        float aimTimer;
+        float firingTimer;
         float damagedTimer;
+        float targetX = Float.NaN;
+        float targetY = Float.NaN;
+        boolean firingRenderLogged;
     }
 
     private final Texture texture;
@@ -49,6 +60,7 @@ public class SecurityTurretController {
     private boolean formationReady;
     private int formationCount;
     private int encounterNumber;
+    private boolean firingStarted;
 
     @SuppressWarnings("unchecked")
     public SecurityTurretController(float[][] groundPoints) {
@@ -121,16 +133,28 @@ public class SecurityTurretController {
     }
 
     private void setActiveCountInternal(int count) {
-        for (int i = 0; i < units.length; i++) {
+        int activeCount = getActiveCount();
+        for (int i = units.length - 1; i >= 0 && activeCount > count; i--) {
             Unit unit = units[i];
-            boolean shouldBeActive = i < count;
-            if (shouldBeActive && !unit.active) {
-                unit.health = MAX_HEALTH;
-                unit.animTime = 0f;
-                unit.disabled = false;
-            }
-            unit.active = shouldBeActive;
-            if (shouldBeActive) unit.destroying = false;
+            if (!unit.active) continue;
+            unit.active = false;
+            activeCount--;
+        }
+        for (Unit unit : units) {
+            if (activeCount >= count) break;
+            // A destroyed turret has completed its lifecycle and cannot be reactivated. Dormant,
+            // never-deployed units remain available for later Warden activation actions.
+            if (unit.active || unit.destroying || unit.disabled) continue;
+            unit.health = MAX_HEALTH;
+            unit.animTime = 0f;
+            unit.animationState = AnimationState.IDLE_ROTATING;
+            unit.aimTimer = 0f;
+            unit.firingTimer = 0f;
+            unit.damagedTimer = 0f;
+            unit.targetX = Float.NaN;
+            unit.targetY = Float.NaN;
+            unit.active = true;
+            activeCount++;
         }
     }
 
@@ -169,6 +193,11 @@ public class SecurityTurretController {
         unit.health = Math.max(0f, unit.health - amount);
         unit.damagedTimer = FLASH_DURATION;
         if (unit.health <= 0f) disable(unit);
+        else {
+            unit.animationState = AnimationState.DAMAGED;
+            unit.aimTimer = 0f;
+            unit.firingTimer = 0f;
+        }
         return index;
     }
 
@@ -177,48 +206,122 @@ public class SecurityTurretController {
         Unit unit = units[index];
         unit.damagedTimer = FLASH_DURATION;
         if (destroyed) disable(unit);
+        else {
+            unit.animationState = AnimationState.DAMAGED;
+            unit.aimTimer = 0f;
+            unit.firingTimer = 0f;
+        }
     }
 
     private static void disable(Unit unit) {
         unit.active = false;
         unit.destroying = true;
         unit.disabled = true;
-        unit.attackTimer = 0f;
+        unit.animationState = AnimationState.DESTROYED;
+        unit.aimTimer = 0f;
+        unit.firingTimer = 0f;
     }
 
-    public void playAttackFlash() {
+    public void playAiming(float targetX, float targetY) {
         int index = firstActiveIndex();
-        if (index >= 0) units[index].attackTimer = FLASH_DURATION;
+        if (index < 0) return;
+        Unit unit = units[index];
+        Gdx.app.log("SecurityTurretTrace", "playAiming unit=" + index
+            + " target=(" + targetX + ", " + targetY + ")");
+        unit.targetX = targetX;
+        unit.targetY = targetY;
+        unit.animationState = AnimationState.AIMING;
+        unit.aimTimer = AIM_DURATION;
+        unit.firingTimer = 0f;
+    }
+
+    public void playFiring(float targetX, float targetY) {
+        int index = firstAimingIndex();
+        if (index < 0) index = firstActiveIndex();
+        if (index < 0) return;
+        Unit unit = units[index];
+        unit.targetX = targetX;
+        unit.targetY = targetY;
+        if (unit.animationState != AnimationState.FIRING) beginFiring(unit);
+    }
+
+    // Retained for the existing Level 3 event name and older state snapshots.
+    public void playAttackFlash() {
+        playFiring(Float.NaN, Float.NaN);
+    }
+
+    private void beginFiring(Unit unit) {
+        Gdx.app.log("SecurityTurretTrace", "beginFiring target=(" + unit.targetX + ", "
+            + unit.targetY + ") duration=" + FIRING_DURATION);
+        unit.animationState = AnimationState.FIRING;
+        unit.aimTimer = 0f;
+        unit.firingTimer = FIRING_DURATION;
+        unit.firingRenderLogged = false;
+        firingStarted = true;
+    }
+
+    public boolean consumeFiringStarted() {
+        if (!firingStarted) return false;
+        firingStarted = false;
+        return true;
     }
 
     public void setCalm(boolean calm) { this.calm = calm; }
 
     public void update(float delta) {
         for (Unit unit : units) {
-            if (!unit.active && !unit.destroying && !unit.disabled) continue;
+            if (!unit.active && !unit.destroying) continue;
             unit.animTime += delta;
-            unit.attackTimer = Math.max(0f, unit.attackTimer - delta);
+            if (unit.animationState == AnimationState.AIMING) {
+                unit.aimTimer = Math.max(0f, unit.aimTimer - delta);
+                if (unit.aimTimer <= 0f) beginFiring(unit);
+            } else if (unit.animationState == AnimationState.FIRING) {
+                unit.firingTimer = Math.max(0f, unit.firingTimer - delta);
+                if (unit.firingTimer <= 0f) {
+                    unit.animationState = AnimationState.IDLE_ROTATING;
+                    unit.animTime = 0f;
+                    unit.targetX = Float.NaN;
+                    unit.targetY = Float.NaN;
+                }
+            }
             unit.damagedTimer = Math.max(0f, unit.damagedTimer - delta);
-            if (unit.destroying && unit.damagedTimer <= 0f) unit.destroying = false;
+            if (unit.animationState == AnimationState.DAMAGED && unit.damagedTimer <= 0f) {
+                unit.animationState = AnimationState.IDLE_ROTATING;
+                unit.animTime = 0f;
+            }
+            if (unit.animationState == AnimationState.DESTROYED && unit.damagedTimer <= 0f) {
+                unit.destroying = false;
+            }
         }
     }
 
     public void draw(SpriteBatch batch) {
         for (Unit unit : units) {
-            if (!unit.active && !unit.destroying && !unit.disabled) continue;
+            if (!unit.active && !unit.destroying) continue;
             int row;
             float time;
             boolean loop;
-            if (unit.damagedTimer > 0f || unit.disabled) {
+            if (unit.animationState == AnimationState.DAMAGED
+                || unit.animationState == AnimationState.DESTROYED) {
                 row = ROW_DAMAGED;
-                time = unit.disabled && unit.damagedTimer <= 0f
+                time = unit.animationState == AnimationState.DESTROYED && unit.damagedTimer <= 0f
                     ? FLASH_DURATION : FLASH_DURATION - unit.damagedTimer;
                 loop = false;
-            } else if (unit.attackTimer > 0f) {
+            } else if (unit.animationState == AnimationState.FIRING) {
                 row = ROW_ATTACK;
-                time = FLASH_DURATION - unit.attackTimer;
+                time = FIRING_DURATION - unit.firingTimer;
                 loop = false;
-            } else {
+                if (!unit.firingRenderLogged) {
+                    Gdx.app.log("SecurityTurretTrace", "FIRING render branch row=" + row
+                        + " frames=" + rows[row].getKeyFrames().length
+                        + " frameDuration=" + FRAME_DURATION);
+                    unit.firingRenderLogged = true;
+                }
+            } else if (unit.animationState == AnimationState.AIMING) {
+                row = ROW_IDLE;
+                time = (AIM_DURATION - unit.aimTimer) * FLASH_DURATION / AIM_DURATION;
+                loop = false;
+            } else { // IDLE_ROTATING
                 row = calm ? ROW_CALM : ROW_IDLE;
                 time = unit.animTime;
                 loop = true;
@@ -232,6 +335,31 @@ public class SecurityTurretController {
         }
     }
 
+    public boolean hasLaserToDraw() {
+        for (Unit unit : units) {
+            if (unit.animationState == AnimationState.FIRING
+                && !Float.isNaN(unit.targetX) && !Float.isNaN(unit.targetY)) return true;
+        }
+        return false;
+    }
+
+    // Drawn in world space by Level3Screen. The sprite sheet supplies the muzzle flare and beam
+    // buildup; this line connects that effect to the selected player without a duplicate weapon.
+    public void drawLaser(ShapeRenderer shape) {
+        for (Unit unit : units) {
+            if (unit.animationState != AnimationState.FIRING
+                || Float.isNaN(unit.targetX) || Float.isNaN(unit.targetY)) continue;
+            float progress = 1f - unit.firingTimer / FIRING_DURATION;
+            float alpha = 0.55f + 0.45f * (float) Math.sin(progress * Math.PI);
+            float muzzleX = unit.x;
+            float muzzleY = unit.groundY + DRAW_SIZE * 0.62f;
+            shape.setColor(1f, 0.08f, 0.04f, alpha);
+            shape.rectLine(muzzleX, muzzleY, unit.targetX, unit.targetY, 8f);
+            shape.setColor(1f, 0.86f, 0.62f, alpha);
+            shape.rectLine(muzzleX, muzzleY, unit.targetX, unit.targetY, 2.5f);
+        }
+    }
+
     private static int frameIndex(TextureRegion[] frames, TextureRegion frame) {
         for (int i = 0; i < frames.length; i++) if (frames[i] == frame) return i;
         return 0;
@@ -242,6 +370,13 @@ public class SecurityTurretController {
         return -1;
     }
 
+    private int firstAimingIndex() {
+        for (int i = 0; i < units.length; i++) {
+            if (units[i].active && units[i].animationState == AnimationState.AIMING) return i;
+        }
+        return -1;
+    }
+
     private int lastActiveIndex() {
         for (int i = units.length - 1; i >= 0; i--) if (units[i].active) return i;
         return -1;
@@ -249,6 +384,7 @@ public class SecurityTurretController {
 
     public void reset() {
         calm = false;
+        firingStarted = false;
         formationReady = false;
         formationCount = 0;
         for (Unit unit : units) {
@@ -256,9 +392,14 @@ public class SecurityTurretController {
             unit.active = false;
             unit.destroying = false;
             unit.disabled = false;
+            unit.animationState = AnimationState.IDLE_ROTATING;
             unit.animTime = 0f;
-            unit.attackTimer = 0f;
+            unit.aimTimer = 0f;
+            unit.firingTimer = 0f;
             unit.damagedTimer = 0f;
+            unit.targetX = Float.NaN;
+            unit.targetY = Float.NaN;
+            unit.firingRenderLogged = false;
         }
     }
 

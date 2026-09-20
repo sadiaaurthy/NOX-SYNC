@@ -10,6 +10,7 @@ import com.badlogic.gdx.utils.Align;
 
 import io.github.fableops.inventory.Inventory;
 import io.github.fableops.inventory.InventoryItem;
+import io.github.fableops.inventory.PlayerInventories;
 import io.github.fableops.level2.Gun;
 import io.github.fableops.level3.Level3Controller;
 import io.github.fableops.level3.PlayerActionType;
@@ -41,10 +42,10 @@ public final class EquipmentSelectionPanel {
     }
 
     public void render(ShapeRenderer shape, SpriteBatch batch, UiViewport ui, int side,
-                       String roleName, PlayerActionType action, Inventory inventory,
+                       String roleName, PlayerActionType action, PlayerInventories inventories,
                        int selectedSlot, Gun gun, Color accent) {
-        int compatibleCount = compatibleCount(inventory, action);
-        int selectedPosition = compatiblePosition(inventory, action, selectedSlot);
+        int compatibleCount = compatibleCount(inventories, side, action);
+        int selectedPosition = compatiblePosition(inventories, side, action, selectedSlot);
         int firstPosition = Math.max(0, Math.min(selectedPosition - MAX_VISIBLE_ROWS / 2,
             Math.max(0, compatibleCount - MAX_VISIBLE_ROWS)));
         int visibleRows = Math.min(MAX_VISIBLE_ROWS, compatibleCount);
@@ -64,8 +65,8 @@ public final class EquipmentSelectionPanel {
 
         int position = 0;
         int drawn = 0;
-        for (int slot = 0; slot < Inventory.CAPACITY && drawn < visibleRows; slot++) {
-            InventoryItem item = inventory.get(slot);
+        for (int slot = 0; slot <= Inventory.CAPACITY && drawn < visibleRows; slot++) {
+            InventoryItem item = Level3Controller.itemAt(inventories, side, slot);
             if (!Level3Controller.itemSupportsAction(action, item)) continue;
             if (position++ < firstPosition) continue;
             float rowY = y + FOOTER_H + (visibleRows - 1 - drawn) * ROW_H;
@@ -86,19 +87,20 @@ public final class EquipmentSelectionPanel {
 
         position = 0;
         drawn = 0;
-        for (int slot = 0; slot < Inventory.CAPACITY && drawn < visibleRows; slot++) {
-            InventoryItem item = inventory.get(slot);
+        for (int slot = 0; slot <= Inventory.CAPACITY && drawn < visibleRows; slot++) {
+            InventoryItem item = Level3Controller.itemAt(inventories, side, slot);
             if (!Level3Controller.itemSupportsAction(action, item)) continue;
             if (position++ < firstPosition) continue;
             float rowY = y + FOOTER_H + (visibleRows - 1 - drawn) * ROW_H;
             batch.draw(item.getIcon(), x + PAD + 8f, rowY + 8f, ICON, ICON);
             font.getData().setScale(1.0f);
             font.setColor(slot == selectedSlot ? accent : TEXT);
-            font.draw(batch, (slot == selectedSlot ? "> " : "  ") + item.getName(),
+            String source = slot == Level3Controller.SHARED_SLOT_INDEX ? " (SHARED)" : "";
+            font.draw(batch, (slot == selectedSlot ? "> " : "  ") + item.getName() + source,
                 x + PAD + ICON + 18f, rowY + 33f);
             font.getData().setScale(0.72f);
             font.setColor(DIM);
-            String detail = detailFor(action, item, inventory, gun);
+            String detail = detailFor(action, item, inventories, side, gun);
             font.draw(batch, detail, x + PANEL_W - PAD - 210f, rowY + 31f,
                 190f, Align.right, false);
             drawn++;
@@ -114,18 +116,22 @@ public final class EquipmentSelectionPanel {
         batch.end();
     }
 
-    private static int compatibleCount(Inventory inventory, PlayerActionType action) {
+    private static int compatibleCount(PlayerInventories inventories, int side,
+                                       PlayerActionType action) {
         int count = 0;
-        for (int slot = 0; slot < Inventory.CAPACITY; slot++) {
-            if (Level3Controller.itemSupportsAction(action, inventory.get(slot))) count++;
+        for (int slot = 0; slot <= Inventory.CAPACITY; slot++) {
+            if (Level3Controller.itemSupportsAction(action,
+                Level3Controller.itemAt(inventories, side, slot))) count++;
         }
         return count;
     }
 
-    private static int compatiblePosition(Inventory inventory, PlayerActionType action, int selectedSlot) {
+    private static int compatiblePosition(PlayerInventories inventories, int side,
+                                          PlayerActionType action, int selectedSlot) {
         int position = 0;
-        for (int slot = 0; slot < Inventory.CAPACITY; slot++) {
-            if (!Level3Controller.itemSupportsAction(action, inventory.get(slot))) continue;
+        for (int slot = 0; slot <= Inventory.CAPACITY; slot++) {
+            if (!Level3Controller.itemSupportsAction(action,
+                Level3Controller.itemAt(inventories, side, slot))) continue;
             if (slot == selectedSlot) return position;
             position++;
         }
@@ -133,13 +139,14 @@ public final class EquipmentSelectionPanel {
     }
 
     private static String detailFor(PlayerActionType action, InventoryItem item,
-                                    Inventory inventory, Gun gun) {
-        if (action == PlayerActionType.BREAKER_WEAPON_ATTACK) {
+                                    PlayerInventories inventories, int side, Gun gun) {
+        if (action == PlayerActionType.BREAKER_WEAPON_ATTACK
+            || action == PlayerActionType.LISTENER_WEAPON_ATTACK) {
             return "Ammo: " + gun.getTotalRounds();
         }
         int remaining = 0;
-        for (int slot = 0; slot < Inventory.CAPACITY; slot++) {
-            InventoryItem carried = inventory.get(slot);
+        for (int slot = 0; slot <= Inventory.CAPACITY; slot++) {
+            InventoryItem carried = Level3Controller.itemAt(inventories, side, slot);
             if (carried != null && item.getName().equalsIgnoreCase(carried.getName())) remaining++;
         }
         return "Remaining: " + remaining;

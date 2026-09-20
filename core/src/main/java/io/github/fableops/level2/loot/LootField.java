@@ -50,14 +50,14 @@ public class LootField {
         List<float[]> placed = new ArrayList<>();
 
         float[] p0 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[0]);
-        // Not shareable, so the gun stays with whoever picked it up and both machines agree who shoots
+        // Weapon ownership follows whichever personal inventory currently holds this item.
         gunDrop = new LootDrop(0, LootTier.MEDIUM, p0[0], p0[1], new InventoryItem("Sidearm",
-            "Fires where you face. Hold attack to shoot, R reloads.", gunIcon, 0f, false), 0);
+            "Fires where you face. Hold attack to shoot, R reloads.", gunIcon, 0f, true), 0);
         drops.add(gunDrop);
 
         float[] p1 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[1]);
         drops.add(new LootDrop(1, LootTier.LOW, p1[0], p1[1], new InventoryItem("Ammo Cache",
-            "Rounds for the sidearm.", ammoCacheIcon, 0f, false), Gun.CACHE_ROUNDS));
+            "Rounds for the sidearm.", ammoCacheIcon, 0f, true), Gun.CACHE_ROUNDS));
 
         float[] p2 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[2]);
         drops.add(item(2, LootTier.MEDIUM, p2[0], p2[1], "Med kit",
@@ -103,10 +103,10 @@ public class LootField {
         return false;
     }
 
-    // Low and medium loot can be handed over through the shared slot, high-value gear stays personal
+    // Loot equipment is shareable; objective items such as the Unstable Core opt out explicitly.
     private static LootDrop item(int id, LootTier tier, float x, float y, String name, String description,
                                  Texture icon, float healAmount) {
-        InventoryItem inventoryItem = new InventoryItem(name, description, icon, healAmount, tier != LootTier.HIGH);
+        InventoryItem inventoryItem = new InventoryItem(name, description, icon, healAmount, true);
         return new LootDrop(id, tier, x, y, inventoryItem, 0);
     }
 

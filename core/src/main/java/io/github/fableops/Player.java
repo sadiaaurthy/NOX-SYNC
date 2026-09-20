@@ -17,6 +17,8 @@ public class Player {
     // Same order as the rows in the sheets
     private enum Direction { DOWN, UP, LEFT, RIGHT }
 
+    public enum AnimationState { IDLE, ATTACKING, SHOOTING, SHIELDING }
+
     private static final Direction[] DIRECTIONS = Direction.values();
     private static final int SHEET_COLUMNS = 8;
     private static final int SHEET_ROWS = 4;
@@ -30,6 +32,10 @@ public class Player {
     // One swing plays all 8 attack frames and the next swing can't start before it ends.
     // 0.35 / 8 is about 44 ms per frame, longer than a frame at 30 FPS, so none get skipped
     private static final float ATTACK_DURATION = 0.35f;
+    private static final float EQUIPMENT_ANIMATION_DURATION = SHEET_COLUMNS * 0.09f;
+    // Resolution takes 1.9 seconds and the Warden response takes up to 1.4 seconds. Keeping the
+    // final shield frame up across both phases makes the block visible when damage is resolved.
+    private static final float SHIELD_HOLD_DURATION = 3.45f;
     // The fall plays once and then stays on its last frame
     public static final float DEATH_DURATION = 0.96f;
     private static final float HURT_FLASH_DURATION = 0.18f;
@@ -43,6 +49,8 @@ public class Player {
     private final Animation<TextureRegion>[] walk; // indexed by Direction.ordinal()
     private final SpriteBounds bounds;
     private final OverlaySheet attack;
+    private final OverlaySheet sidearm;
+    private final OverlaySheet shield;
     private final OverlaySheet death;
     private final int keyUp, keyDown, keyLeft, keyRight;
     // -1 means unset. It is checked explicitly because Input.Keys.ANY_KEY is also -1.
@@ -54,7 +62,9 @@ public class Player {
     private float stateTime = 0f;
     private Direction facing = Direction.DOWN;
     private Direction attackDirection = Direction.DOWN;
+    private AnimationState animationState = AnimationState.IDLE;
     private float attackTimer = 0f;
+    private float equipmentAnimationTimer = 0f;
     private float hurtVisualTimer = 0f;
     private float deathTimer = 0f;
     // Per direction: 0 while its key is up, otherwise the order the keys went down in
@@ -97,6 +107,11 @@ public class Player {
         bounds = new SpriteBounds(pixmap, allFrames, scales, SIZE);
 
         attack = new OverlaySheet(pixmap, sheetName + "Attacking.png", ATTACK_DURATION);
+        String equipmentPrefix = sheetName.toLowerCase().startsWith("brawl") ? "Brawl" : "Hacker";
+        sidearm = new OverlaySheet(pixmap, equipmentPrefix + "SideArm.png",
+            EQUIPMENT_ANIMATION_DURATION);
+        shield = new OverlaySheet(pixmap, equipmentPrefix + "Shield.png",
+            EQUIPMENT_ANIMATION_DURATION);
         death = new OverlaySheet(pixmap, sheetName + "Death.png", DEATH_DURATION);
         pixmap.dispose();
     }
@@ -187,20 +202,46 @@ public class Player {
 
     // Returns false while the last swing is still playing
     public boolean startAttack() {
-        if (attackTimer > 0f) return false;
+        if (animationState != AnimationState.IDLE || attackTimer > 0f) return false;
         attackTimer = ATTACK_DURATION;
         attackDirection = facing;
+        animationState = AnimationState.ATTACKING;
         return true;
     }
 
+    public void startShooting() {
+        attackTimer = 0f;
+        equipmentAnimationTimer = EQUIPMENT_ANIMATION_DURATION;
+        attackDirection = facing;
+        animationState = AnimationState.SHOOTING;
+    }
+
+    public void startShielding() {
+        attackTimer = 0f;
+        equipmentAnimationTimer = SHIELD_HOLD_DURATION;
+        attackDirection = facing;
+        animationState = AnimationState.SHIELDING;
+    }
+
+    public AnimationState getAnimationState() { return animationState; }
+
     public void updateVisualState(float delta) {
         attackTimer = Math.max(0f, attackTimer - delta);
+        equipmentAnimationTimer = Math.max(0f, equipmentAnimationTimer - delta);
+        if (animationState == AnimationState.ATTACKING && attackTimer <= 0f) {
+            animationState = AnimationState.IDLE;
+        } else if ((animationState == AnimationState.SHOOTING
+            || animationState == AnimationState.SHIELDING) && equipmentAnimationTimer <= 0f) {
+            animationState = AnimationState.IDLE;
+        }
         hurtVisualTimer = Math.max(0f, hurtVisualTimer - delta);
         deathTimer = (health <= 0f) ? deathTimer + delta : 0f;
     }
 
     public void resetVisualState() {
         attackTimer = 0f;
+        equipmentAnimationTimer = 0f;
+        animationState = AnimationState.IDLE;
         hurtVisualTimer = 0f;
         deathTimer = 0f;
     }
@@ -275,7 +316,7 @@ public class Player {
 
     // The direction the sprite is drawn facing, sent to the client with the attack timer
     public int getDirection() {
-        return (attackTimer > 0f ? attackDirection : facing).ordinal();
+        return (animationState != AnimationState.IDLE ? attackDirection : facing).ordinal();
     }
 
     // Where the player faces, as a unit vector. Shots go this way
@@ -298,7 +339,10 @@ public class Player {
         this.x = x;
         this.y = y;
         facing = DIRECTIONS[direction];
-        attackDirection = facing;
+        if (animationState != AnimationState.SHOOTING && animationState != AnimationState.SHIELDING) {
+            attackDirection = facing;
+            animationState = attackTimer > 0f ? AnimationState.ATTACKING : AnimationState.IDLE;
+        }
         this.stateTime = stateTime;
         this.attackTimer = attackTimer;
         updateCamera();
@@ -367,7 +411,13 @@ public class Player {
             : 1f;
         batch.setColor(1f, tint, tint, 1f);
 
-        if (attackTimer > 0f) {
+        if (animationState == AnimationState.SHOOTING) {
+            sidearm.draw(batch, attackDirection.ordinal(),
+                EQUIPMENT_ANIMATION_DURATION - equipmentAnimationTimer);
+        } else if (animationState == AnimationState.SHIELDING) {
+            shield.draw(batch, attackDirection.ordinal(),
+                SHIELD_HOLD_DURATION - equipmentAnimationTimer);
+        } else if (animationState == AnimationState.ATTACKING && attackTimer > 0f) {
             attack.draw(batch, attackDirection.ordinal(), ATTACK_DURATION - attackTimer);
         } else {
             TextureRegion frame = walk[facing.ordinal()].getKeyFrame(stateTime, true);
@@ -386,6 +436,8 @@ public class Player {
     public void dispose() {
         sheet.dispose();
         attack.texture.dispose();
+        sidearm.texture.dispose();
+        shield.texture.dispose();
         death.texture.dispose();
     }
 }

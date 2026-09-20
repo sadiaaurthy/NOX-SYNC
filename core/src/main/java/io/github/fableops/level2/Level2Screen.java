@@ -19,6 +19,7 @@ import io.github.fableops.Player;
 import io.github.fableops.Role;
 import io.github.fableops.SwarmController;
 import io.github.fableops.inventory.PlayerInventories;
+import io.github.fableops.inventory.network.InventoryTransferMessage;
 import io.github.fableops.level2.loot.LootDrop;
 import io.github.fableops.level2.loot.LootField;
 import io.github.fableops.level2.network.CoreInteractRequestMessage;
@@ -165,9 +166,13 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         // Replace Level 1's listeners, that screen is disposed
         if (isHost || isDebug) {
             controller = new Level2Controller(hostSession, core, loot, gun, inventories, world, player1, player2);
+            inventories.setTransferHandler((side, fromShared, slot) -> controller.transferInventory(
+                new InventoryTransferMessage(side, fromShared, slot)));
             if (hostSession != null) hostSession.setListener(story.wrap(controller.asMessageListener()));
         } else {
             controller = null;
+            inventories.setTransferHandler((side, fromShared, slot) -> clientSession.send(
+                new InventoryTransferMessage(side, fromShared, slot)));
             // Messages come in on the network thread, so handle them on the render thread
             clientSession.setListener(story.wrap((type, body) ->
                 Gdx.app.postRunnable(() -> onHostMessage(type, body))));
@@ -199,6 +204,12 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
             case "GUN_STATE":
                 gun.apply(GunStateMessage.deserialize(body));
                 break;
+            case "INVENTORY_TRANSFER": {
+                InventoryTransferMessage transfer = InventoryTransferMessage.deserialize(body);
+                inventories.applyTransfer(transfer.getPlayerSide(), transfer.isFromShared(),
+                    transfer.getPersonalSlot());
+                break;
+            }
             case "LEVEL_RESTART":
                 restartLocalState();
                 break;

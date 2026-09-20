@@ -18,6 +18,11 @@ import io.github.fableops.inventory.SharedSlot;
 // Only drawn over the owner's half, so the other player can keep playing
 public class InventoryUI {
 
+    @FunctionalInterface
+    public interface TransferListener {
+        void request(boolean fromShared, int personalSlot);
+    }
+
     // UI units, fits inside one half
     private static final float PANEL_W = 820f;
     private static final float PANEL_H = 780f;
@@ -81,7 +86,8 @@ public class InventoryUI {
     // Uses the owner's movement keys, that player can't move while the panel is open
     // The open/close key is handled by the caller, isKeyJustPressed stays true all frame
     public void handleInput(Inventory inventory, SharedSlot shared, Player owner,
-                            int keyUp, int keyDown, int keyLeft, int keyRight) {
+                            int keyUp, int keyDown, int keyLeft, int keyRight,
+                            TransferListener transferListener) {
         if (!open) return;
 
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
@@ -101,7 +107,9 @@ public class InventoryUI {
 
         if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) use(inventory, shared, owner);
         // R, not F, because F is player 1's attack
-        if (Gdx.input.isKeyJustPressed(Input.Keys.R)) transfer(inventory, shared);
+        if (Gdx.input.isKeyJustPressed(Input.Keys.R)) {
+            transferListener.request(sharedFocused, inventory.getSelectedIndex());
+        }
     }
 
     // Items are used up even at full health
@@ -111,21 +119,6 @@ public class InventoryUI {
         owner.heal(item.getHealAmount());
         if (sharedFocused) shared.clear();
         else inventory.remove(inventory.getSelectedIndex());
-    }
-
-    // Swaps with the shared slot. Taking it out fails if the grid is full
-    private void transfer(Inventory inventory, SharedSlot shared) {
-        if (sharedFocused) {
-            InventoryItem incoming = shared.get();
-            if (incoming == null) return;
-            if (!inventory.add(incoming)) return; // grid is full
-            shared.clear();
-        } else {
-            int index = inventory.getSelectedIndex();
-            InventoryItem outgoing = inventory.get(index);
-            if (outgoing == null || !outgoing.isShareable()) return;
-            inventory.set(index, shared.put(outgoing));
-        }
     }
 
     // accent is cyan for P1, magenta for P2

@@ -35,7 +35,13 @@ public enum PlayerActionType {
     USE_MEDKIT(null, "Use Medkit", "uses recovered medical supplies"),
 
     // Kept for event-channel compatibility with clients from the first Level 3 pass.
-    USE_ITEM(null, "Use Item", "reaches for what they carried");
+    USE_ITEM(null, "Use Item", "reaches for what they carried"),
+
+    // Appended so the ordinals of the original event-channel actions remain stable.
+    LISTENER_WEAPON_ATTACK(Role.LISTENER, "Sidearm Shot",
+        "fires the recovered sidearm at the active defense"),
+    LISTENER_SHIELD_DEFENSE(Role.LISTENER, "Shield Defense",
+        "raises the recovered shield against the next response");
 
     private final Role role;
     private final String label;
@@ -57,7 +63,7 @@ public enum PlayerActionType {
     public static PlayerActionType[] optionsFor(Role role) {
         return (role == Role.BREAKER)
             ? new PlayerActionType[]{BREAKER_PHYSICAL_STRIKE, BREAKER_DISABLE_DRONE,
-                BREAKER_REPAIR_MECHANISM, BREAKER_PROTECT_LISTENER}
+                BREAKER_PROTECT_LISTENER, BREAKER_REPAIR_MECHANISM}
             : new PlayerActionType[]{LISTENER_SCAN_WARDEN, LISTENER_REDUCE_SUBROUTINE,
                 LISTENER_RECOVER_LOGS, LISTENER_AUTHORIZATION_ATTEMPT, LISTENER_SUPPORT_BREAKER};
     }

@@ -64,7 +64,17 @@ public class WardenController {
 
     public WardenState getState() { return state; }
 
-    public void setState(WardenState state) { this.state = state; }
+    public void setState(WardenState state) {
+        if (this.state != state) {
+            // Narrative transitions own the frame completely; a hit that crosses a threshold must
+            // not make Memory Recovery, Directive Conflict, or Stand Down look like damage beats.
+            attackFlashTimer = 0f;
+            damagedFlashTimer = 0f;
+            // The restored row must begin at frame zero exactly once.
+            if (state.isStoodDown()) animTime = 0f;
+        }
+        this.state = state;
+    }
 
     public float getStability() { return stability; }
 
@@ -83,7 +93,7 @@ public class WardenController {
     // Called once when the Warden's own turn resolves
     public void playAttackFlash() { attackFlashTimer = FLASH_DURATION; }
 
-    // Called once a Breaker action lands on a defense unit, so the Warden visibly reacts
+    // Called once a direct player strike lands on the Warden itself.
     public void playDamagedFlash() { damagedFlashTimer = FLASH_DURATION; }
 
     public void update(float delta) {
@@ -107,7 +117,7 @@ public class WardenController {
         } else if (state.isStoodDown()) {
             row = ROW_RESTORED;
             time = animTime;
-            loop = true;
+            loop = false;
         } else {
             row = ROW_IDLE;
             time = animTime;

@@ -14,6 +14,11 @@ import io.github.fableops.ui.hud.InventoryUI;
 // Both inventories and panels. The host opens with 1, the client with 2, debug can use both
 public class PlayerInventories {
 
+    @FunctionalInterface
+    public interface TransferHandler {
+        void request(int playerSide, boolean fromShared, int personalSlot);
+    }
+
     private final Inventory inventoryP1 = new Inventory();
     private final Inventory inventoryP2 = new Inventory();
     private final SharedSlot shared = new SharedSlot();
@@ -21,6 +26,8 @@ public class PlayerInventories {
     private final BitmapFont font = new BitmapFont(Gdx.files.internal("pixel.fnt"));
     private final InventoryUI uiP1;
     private final InventoryUI uiP2;
+    private TransferHandler transferHandler = (side, fromShared, slot) ->
+        applyTransfer(side, fromShared, slot);
 
     public PlayerInventories() {
         font.getRegion().getTexture().setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest);
@@ -31,6 +38,50 @@ public class PlayerInventories {
 
     public Inventory forPlayer(int side) {
         return (side == 1) ? inventoryP1 : inventoryP2;
+    }
+
+    public InventoryItem sharedItem() {
+        return shared.get();
+    }
+
+    public void removeSharedItem() {
+        shared.clear();
+    }
+
+    public void setTransferHandler(TransferHandler transferHandler) {
+        this.transferHandler = transferHandler == null
+            ? (side, fromShared, slot) -> applyTransfer(side, fromShared, slot)
+            : transferHandler;
+    }
+
+    // Applies one authoritative shared-slot move. Putting an item swaps with the shared slot;
+    // taking fails when the destination inventory is full, matching the original UI behavior.
+    public boolean applyTransfer(int side, boolean fromShared, int personalSlot) {
+        if (side != 1 && side != 2) return false;
+        Inventory inventory = forPlayer(side);
+        if (fromShared) {
+            InventoryItem incoming = shared.get();
+            if (incoming == null || !inventory.add(incoming)) return false;
+            shared.clear();
+            return true;
+        }
+
+        InventoryItem outgoing = inventory.get(personalSlot);
+        if (outgoing == null || !outgoing.isShareable()) return false;
+        inventory.set(personalSlot, shared.put(outgoing));
+        return true;
+    }
+
+    // 0 means the item is in the shared slot or absent; only personal possession owns the weapon.
+    public int currentHolder(String itemName) {
+        for (int side = 1; side <= 2; side++) {
+            Inventory inventory = forPlayer(side);
+            for (int slot = 0; slot < Inventory.CAPACITY; slot++) {
+                InventoryItem item = inventory.get(slot);
+                if (item != null && itemName.equalsIgnoreCase(item.getName())) return side;
+            }
+        }
+        return 0;
     }
 
     // Both inventories and the shared slot, with the panels closed
@@ -76,9 +127,11 @@ public class PlayerInventories {
 
         // Each panel uses its owner's movement keys, that player can't move while it's open
         uiP1.handleInput(inventoryP1, shared, player1, Input.Keys.W, Input.Keys.S,
-            Input.Keys.A, Input.Keys.D);
+            Input.Keys.A, Input.Keys.D,
+            (fromShared, slot) -> transferHandler.request(1, fromShared, slot));
         uiP2.handleInput(inventoryP2, shared, player2, Input.Keys.UP, Input.Keys.DOWN,
-            Input.Keys.LEFT, Input.Keys.RIGHT);
+            Input.Keys.LEFT, Input.Keys.RIGHT,
+            (fromShared, slot) -> transferHandler.request(2, fromShared, slot));
     }
 
     public void render(ShapeRenderer shape, SpriteBatch batch, float uiWorldW, float uiWorldH,
