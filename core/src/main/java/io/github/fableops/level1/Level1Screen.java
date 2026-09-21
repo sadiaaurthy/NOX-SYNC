@@ -49,7 +49,9 @@ public class Level1Screen implements Screen, SplitScreen.HalfRenderer {
 
     private static final float ATTACK_RANGE = 120f;
     private static final int ATTACK_DAMAGE = 15;
-    private static final int CONTACT_DAMAGE = 10; // per second of contact
+    // Per second of contact. Lower than it looks next to 100 HP: nothing heals in Level 1, so
+    // every point taken here is gone for the rest of the level, and a mistake's wave never despawns
+    private static final int CONTACT_DAMAGE = 6;
     // Enemy updates are sent 20 times a second, not every frame
     private static final float ENEMY_STATE_INTERVAL = 1f / 20f;
     // A fallen player's death animation plays out before the mission failed window

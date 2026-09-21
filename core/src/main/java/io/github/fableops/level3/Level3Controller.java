@@ -13,6 +13,7 @@ import io.github.fableops.inventory.InventoryItem;
 import io.github.fableops.inventory.PlayerInventories;
 import io.github.fableops.inventory.network.InventoryTransferMessage;
 import io.github.fableops.level2.Gun;
+import io.github.fableops.level2.Sidearms;
 import io.github.fableops.level3.network.Level3ActionMessage;
 import io.github.fableops.level3.network.Level3TurnStateMessage;
 import io.github.fableops.network.session.HostSession;
@@ -44,16 +45,27 @@ public class Level3Controller {
     private static final float ENDING_DELAY = 2.0f;
     private static final int DRONE_COUNT = 4;
     private static final int TURRET_COUNT = 4;
+    // Every hit an operator takes in the Warden encounter, in one place. Tuned against the 100 HP
+    // in Player.MAX_HEALTH: a turret is the heavy hit, a drone lunge the common one, and the
+    // containment warning the unavoidable chip that lands on both operators at once
     private static final float TURRET_DAMAGE = 14f;
+    private static final float DRONE_DAMAGE = 9f;
+    private static final float CONTAINMENT_WARNING_DAMAGE = 6f;
     private static final float RANGE_TRACE_INTERVAL = 2f;
-    // One Side Arm hit destroys a Security Turret (MAX_HEALTH 30). Kept above that on purpose so a
-    // later change to turret HP does not quietly turn this back into a multi-shot fight. Applies
-    // only to Side Arm damage against turrets; the drone and every other weapon value are unchanged.
-    private static final float TURRET_SIDEARM_DAMAGE = 50f;
+    // Sidearm damage against a turret (MAX_HEALTH 30), so three shots finish one - two with the
+    // ammo cache, which is what that pickup buys. TNT is the one-shot alternative
+    private static final float TURRET_SIDEARM_DAMAGE = 10f;
+    // The ammo cache raises turn damage from 30 to 45; the same 1.5x carries to turret fire
+    private static final float AMMO_CACHE_MULTIPLIER = 1.5f;
+    // One charge takes down one turret. Kept well above turret MAX_HEALTH on purpose, so retuning
+    // turret HP never quietly turns a charge into a partial hit
+    private static final float TNT_DAMAGE = 999f;
+    // Disable Drone with no sidearm to hand: the operator still pulls the kill switch by hand
+    private static final float BARE_HANDED_DRONE_DAMAGE = 30f;
 
     private final HostSession hostSession;
     private final PlayerInventories inventories;
-    private final Gun gun;
+    private final Sidearms sidearms;
     private final Player player1;
     private final Player player2;
     private final Role sideOneRole;
@@ -67,6 +79,9 @@ public class Level3Controller {
     private float nextWardenDamageMultiplier = 1f;
     private boolean p1Braced;
     private boolean p2Braced;
+    // Rare Plating: once sealed, that operator takes no damage for the rest of the encounter.
+    // Index = side - 1. Cleared only by a level restart
+    private final boolean[] plated = new boolean[2];
     private boolean listenerProtected;
     private boolean breakerSupported;
     private Player pendingDroneTarget;
@@ -125,10 +140,10 @@ public class Level3Controller {
     private int p2SelectedItemSlot = -1;
 
     public Level3Controller(HostSession hostSession, Level3Map world, PlayerInventories inventories,
-                            Gun gun, Player player1, Player player2, Role sideOneRole) {
+                            Sidearms sidearms, Player player1, Player player2, Role sideOneRole) {
         this.hostSession = hostSession;
         this.inventories = inventories;
-        this.gun = gun;
+        this.sidearms = sidearms;
         this.player1 = player1;
         this.player2 = player2;
         this.sideOneRole = sideOneRole;
@@ -298,7 +313,7 @@ public class Level3Controller {
             ? PlayerActionType.BREAKER_SHIELD_DEFENSE : PlayerActionType.LISTENER_SHIELD_DEFENSE;
         for (int slot = 0; slot < Inventory.CAPACITY; slot++) {
             InventoryItem item = inventory.get(slot);
-            if ((gun != null && gun.hasAmmo() && itemSupportsAction(weapon, item))
+            if ((sidearms != null && sidearms.forSide(side).hasAmmo() && itemSupportsAction(weapon, item))
                 || itemSupportsAction(shield, item)
                 || itemSupportsAction(PlayerActionType.USE_MEDKIT, item)) return true;
         }
@@ -365,8 +380,8 @@ public class Level3Controller {
         return hasMedkit(inventories, side) || hasShield(inventories, side);
     }
 
-    public static boolean hasSidearm(PlayerInventories inventories, Gun gun, int side) {
-        return gun != null && hasNamedItem(inventories, side, "Sidearm");
+    public static boolean hasSidearm(PlayerInventories inventories, Sidearms sidearms, int side) {
+        return sidearms != null && hasNamedItem(inventories, side, "Sidearm");
     }
 
     public static boolean hasShield(PlayerInventories inventories, int side) {
@@ -376,6 +391,10 @@ public class Level3Controller {
             if (item != null && isShieldItem(item)) return true;
         }
         return isShieldItem(inventories.sharedItem());
+    }
+
+    public static boolean hasPlating(PlayerInventories inventories, int side) {
+        return hasNamedItem(inventories, side, "Rare Plating");
     }
 
     public static boolean hasMedkit(PlayerInventories inventories, int side) {
@@ -388,12 +407,18 @@ public class Level3Controller {
         return shared != null && shared.isConsumable();
     }
 
+    public static boolean hasTnt(PlayerInventories inventories, int side) {
+        return hasNamedItem(inventories, side, "TNT");
+    }
+
     public static boolean requiresEquipment(PlayerActionType action) {
         return action == PlayerActionType.BREAKER_WEAPON_ATTACK
             || action == PlayerActionType.LISTENER_WEAPON_ATTACK
             || action == PlayerActionType.BREAKER_SHIELD_DEFENSE
             || action == PlayerActionType.LISTENER_SHIELD_DEFENSE
-            || action == PlayerActionType.USE_MEDKIT;
+            || action == PlayerActionType.USE_MEDKIT
+            || action == PlayerActionType.USE_TNT
+            || action == PlayerActionType.USE_PLATING;
     }
 
     public static boolean itemSupportsAction(PlayerActionType action, InventoryItem item) {
@@ -405,11 +430,27 @@ public class Level3Controller {
             case BREAKER_SHIELD_DEFENSE:
             case LISTENER_SHIELD_DEFENSE:
                 return isShieldItem(item);
+            case USE_PLATING:
+                return isPlatingItem(item);
+            case USE_TNT:
+                return "TNT".equalsIgnoreCase(item.getName());
             case USE_MEDKIT:
                 return item.isConsumable();
             default:
                 return false;
         }
+    }
+
+    // How many carried items could satisfy this action. One or fewer means there is nothing to
+    // choose between, so the caller can skip the equipment picker entirely
+    public static int compatibleSlotCount(PlayerInventories inventories, int side,
+                                          PlayerActionType action) {
+        int count = 0;
+        for (int i = 0; i < Inventory.CAPACITY; i++) {
+            if (itemSupportsAction(action, inventories.forPlayer(side).get(i))) count++;
+        }
+        if (itemSupportsAction(action, inventories.sharedItem())) count++;
+        return count;
     }
 
     public static int firstCompatibleSlot(PlayerInventories inventories, int side,
@@ -428,14 +469,14 @@ public class Level3Controller {
             : inventories.forPlayer(side).get(slot);
     }
 
-    public static PlayerActionType[] availableActions(PlayerInventories inventories, Gun gun,
+    public static PlayerActionType[] availableActions(PlayerInventories inventories, Sidearms sidearms,
                                                        int side, Role role) {
         List<PlayerActionType> actions = new ArrayList<>();
+        // Role actions first, in a fixed order. There is no inventory column any more: carried gear
+        // appears below as its own row, and only while that operator is actually carrying it
         if (role == Role.BREAKER) {
             actions.add(PlayerActionType.BREAKER_PHYSICAL_STRIKE);
-            if (hasSidearm(inventories, gun, side)) actions.add(PlayerActionType.BREAKER_WEAPON_ATTACK);
             actions.add(PlayerActionType.BREAKER_DISABLE_DRONE);
-            if (hasShield(inventories, side)) actions.add(PlayerActionType.BREAKER_SHIELD_DEFENSE);
             actions.add(PlayerActionType.BREAKER_PROTECT_LISTENER);
             actions.add(PlayerActionType.BREAKER_REPAIR_MECHANISM);
         } else {
@@ -443,11 +484,16 @@ public class Level3Controller {
             actions.add(PlayerActionType.LISTENER_REDUCE_SUBROUTINE);
             actions.add(PlayerActionType.LISTENER_RECOVER_LOGS);
             actions.add(PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT);
-            if (hasSidearm(inventories, gun, side)) actions.add(PlayerActionType.LISTENER_WEAPON_ATTACK);
-            if (hasShield(inventories, side)) actions.add(PlayerActionType.LISTENER_SHIELD_DEFENSE);
             actions.add(PlayerActionType.LISTENER_SUPPORT_BREAKER);
-            if (hasMedkit(inventories, side)) actions.add(PlayerActionType.USE_MEDKIT);
         }
+        // Gear rows, common to both operators
+        if (hasShield(inventories, side)) {
+            actions.add(role == Role.BREAKER
+                ? PlayerActionType.BREAKER_SHIELD_DEFENSE : PlayerActionType.LISTENER_SHIELD_DEFENSE);
+        }
+        if (hasPlating(inventories, side)) actions.add(PlayerActionType.USE_PLATING);
+        if (hasMedkit(inventories, side)) actions.add(PlayerActionType.USE_MEDKIT);
+        if (hasTnt(inventories, side)) actions.add(PlayerActionType.USE_TNT);
         return actions.toArray(new PlayerActionType[0]);
     }
 
@@ -483,10 +529,14 @@ public class Level3Controller {
     public void transferInventory(InventoryTransferMessage message) {
         if (!inventories.applyTransfer(message.getPlayerSide(), message.isFromShared(),
             message.getPersonalSlot())) return;
-        if (gun != null) gun.giveTo(inventories.currentHolder("Sidearm"));
+        // A Sidearm can change hands through the shared slot, so re-read who is armed on both sides
+        if (sidearms != null) sidearms.syncOwnership(inventories);
         if (hostSession != null) {
             hostSession.send(message);
-            if (gun != null) hostSession.send(gun.toMessage());
+            if (sidearms != null) {
+                hostSession.send(sidearms.forSide(1).toMessage());
+                hostSession.send(sidearms.forSide(2).toMessage());
+            }
         }
     }
 
@@ -502,7 +552,12 @@ public class Level3Controller {
         } else if (action == PlayerActionType.USE_MEDKIT && hasMedkit(inventories, side)) {
             // Quick-use prompts may consume a carried medkit for either operator without adding a
             // new action row to the Breaker's established turn menu.
-        } else if (!Arrays.asList(availableActions(inventories, gun, side, role)).contains(action)) {
+        } else if (action == PlayerActionType.USE_PLATING && hasPlating(inventories, side)) {
+            // Gear rows are built from the inventory, not from a fixed role list
+        } else if (action == PlayerActionType.USE_TNT && hasTnt(inventories, side)) {
+            // TNT is reached from the inventory column rather than a role action row, so it never
+            // appears in availableActions and would otherwise be rejected by the check below.
+        } else if (!Arrays.asList(availableActions(inventories, sidearms, side, role)).contains(action)) {
             return;
         }
         if (action == PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT) {
@@ -547,7 +602,7 @@ public class Level3Controller {
 
         switch (reaction) {
             case SIDEARM:
-                if (!hasSidearm(inventories, gun, side) || !gun.hasAmmo()
+                if (!hasSidearm(inventories, sidearms, side) || !sidearms.forSide(side).hasAmmo()
                     || !itemSupportsAction(weaponAction, itemAt(inventories, side, inventorySlot))) return;
                 break;
             case SHIELD:
@@ -580,14 +635,14 @@ public class Level3Controller {
 
         if (reaction == ReactionType.SIDEARM) {
             target.startShooting();
-            gun.useTurnBasedRound();
+            sidearms.forSide(side).useTurnBasedRound();
             float hitX = drone.unitX(reactionUnitIndex);
             float hitY = drone.unitY(reactionUnitIndex);
-            boolean hit = damageReactionDrone(gun.turnBasedDamage());
-            gun.showTurnBasedShot(target, hitX, hitY, hit);
+            boolean hit = damageReactionDrone(sidearms.forSide(side).turnBasedDamage());
+            sidearms.forSide(side).showTurnBasedShot(target, hitX, hitY, hit);
             setOperatorLine(side, callSignOf(target) + " fires the Sidearm into the incoming attack.");
             Gdx.app.log("Level3ReactionTrace", "Player Sidearm used side=" + side
-                + " ammoRemaining=" + gun.getTotalRounds() + " hit=" + hit);
+                + " ammoRemaining=" + sidearms.forSide(side).getTotalRounds() + " hit=" + hit);
             if (!reactionSourceActive()) {
                 wardenLine = "The attacking defense drone is destroyed before impact.";
                 clearReactionAttack();
@@ -628,13 +683,13 @@ public class Level3Controller {
             + " turretID=" + unit);
         if (reaction == ReactionType.SIDEARM) {
             target.startShooting();
-            gun.useTurnBasedRound();
+            sidearms.forSide(side).useTurnBasedRound();
             int before = turret.getActiveCount();
             float hitX = turret.unitX(unit);
             float hitY = turret.unitY(unit);
             turretDamagedIndex = turret.damage(unit, TURRET_SIDEARM_DAMAGE);
             turretDestroyed = turretDamagedIndex >= 0 && turret.getActiveCount() < before;
-            gun.showTurnBasedShot(target, hitX, hitY, turretDamagedIndex >= 0);
+            sidearms.forSide(side).showTurnBasedShot(target, hitX, hitY, turretDamagedIndex >= 0);
             setOperatorLine(side, callSignOf(target) + (turretDestroyed
                 ? " destroys the locked turret with one Sidearm shot."
                 : " opens fire on the locked turret."));
@@ -833,40 +888,59 @@ public class Level3Controller {
         String name = callSignOf(self);
         switch (action) {
             case BREAKER_PHYSICAL_STRIKE: {
-                boolean hitDefense = damageDefense(15f);
-                boolean hitWarden = !hitDefense && strikeWarden();
-                boolean hit = hitDefense || hitWarden;
+                // Physical Attack is turret fire. Three sidearm rounds finish a housing, two with
+                // the ammo cache; TNT is the one-shot alternative
+                int side = self == player1 ? 1 : 2;
+                // Target and weapon are both checked before a round is spent: firing at an empty
+                // gantry, or with no sidearm at all, must not quietly cost ammo
+                if (turret.getActiveCount() == 0) {
+                    return name + " sweeps the gantry, but no turret is still online.";
+                }
+                if (!hasSidearm(inventories, sidearms, side)) {
+                    return name + " has no sidearm to bring against the turret housing.";
+                }
+                Gun weapon = sidearms.forSide(side);
+                String blocked = spendRoundOrReload(weapon, name);
+                if (blocked != null) return blocked;
+
+                float damage = TURRET_SIDEARM_DAMAGE
+                    * (weapon.hasAmmoCache() ? AMMO_CACHE_MULTIPLIER : 1f);
+                int before = turret.getActiveCount();
+                boolean hit = damageTurret(damage);
+                boolean destroyed = turret.getActiveCount() < before;
+                if (hit) {
+                    weapon.showTurnBasedShot(self,
+                        turret.unitX(turretDamagedIndex), turret.unitY(turretDamagedIndex), true);
+                }
                 addProgress(hit ? 5f : 3f, 4f);
                 return name + " " + action.flavorVerb()
-                    + (hitDefense ? "; the unit recoils from the impact."
-                        : hitWarden ? "; the Warden's outer shell absorbs the blow."
-                        : ", but no target remains in reach.");
-            }
-            case BREAKER_WEAPON_ATTACK:
-            case LISTENER_WEAPON_ATTACK: {
-                int side = self == player1 ? 1 : 2;
-                InventoryItem selected = itemAt(inventories, side, inventorySlot);
-                if (!itemSupportsAction(action, selected) || !hasSidearm(inventories, gun, side)
-                    || !gun.useTurnBasedRound()) {
-                    return name + " finds the recovered sidearm empty.";
-                }
-                float damage = gun.turnBasedDamage();
-                boolean hitDefense = drone.isActive()
-                    ? damageDrone(damage) : damageTurret(TURRET_SIDEARM_DAMAGE);
-                boolean hitWarden = !hitDefense && strikeWarden();
-                boolean hit = hitDefense || hitWarden;
-                gun.showTurnBasedShot(self, warden.centreX(), warden.centreY() - 60f, hit);
-                addProgress(hit ? (gun.hasAmmoCache() ? 8f : 6f) : 3f, 5f);
-                return name + " " + action.flavorVerb()
-                    + (gun.hasAmmoCache() ? " with the recovered ammo cache's high-output load" : "")
-                    + (hitDefense ? "; the targeted unit buckles."
-                        : hitWarden ? "; the Warden's armor sparks but holds."
-                        : ", but no target remains online.");
+                    + (destroyed ? "; the housing splits open and the turret goes dark."
+                        : hit ? "; rounds spark off the turret housing."
+                        : ", but the shot finds nothing.");
             }
             case BREAKER_DISABLE_DRONE: {
-                boolean hit = damageDrone(30f);
+                // Disable Drone is drone fire. TNT does nothing to a drone, so this is their answer
+                int side = self == player1 ? 1 : 2;
+                if (drone.getActiveCount() == 0) {
+                    return name + " " + action.flavorVerb() + ", but finds no deployed drone.";
+                }
+                Gun weapon = sidearms.forSide(side);
+                // The ammo rule only binds an operator who actually carries a sidearm. Unarmed,
+                // they reach the kill switch by hand and no phantom weapon is drained
+                boolean armed = hasSidearm(inventories, sidearms, side);
+                if (armed) {
+                    String blocked = spendRoundOrReload(weapon, name);
+                    if (blocked != null) return blocked;
+                }
+                float damage = armed ? weapon.turnBasedDamage() : BARE_HANDED_DRONE_DAMAGE;
+                boolean hit = damageDrone(damage);
+                if (hit) {
+                    weapon.showTurnBasedShot(self,
+                        drone.unitX(droneDamagedIndex), drone.unitY(droneDamagedIndex), true);
+                }
                 addProgress((hit ? 7f : 3f) + (breakerSupported ? 3f : 0f), 6f);
                 return name + " " + action.flavorVerb()
+                    + (weapon.hasAmmoCache() ? " with the ammo cache's high-output load" : "")
                     + (hit ? ", and it powers down." : ", but finds no deployed drone.");
             }
             case BREAKER_REPAIR_MECHANISM:
@@ -912,6 +986,10 @@ public class Level3Controller {
                 return name + " " + action.flavorVerb() + ".";
             case USE_MEDKIT:
                 return useMedkit(self, inventorySlot);
+            case USE_TNT:
+                return useTnt(self, inventorySlot);
+            case USE_PLATING:
+                return usePlating(self, inventorySlot);
             case USE_ITEM:
                 return useItem(self);
             default:
@@ -933,6 +1011,10 @@ public class Level3Controller {
         return true;
     }
 
+    // Unused since turn attacks became drone-only: turrets now answer to TNT, or to the Sidearm
+    // reaction when one opens fire. Kept as the single place that would re-link the two if that
+    // ever changes back
+    @SuppressWarnings("unused")
     private boolean damageDefense(float damage) {
         return drone.isActive() ? damageDrone(damage) : damageTurret(damage);
     }
@@ -982,10 +1064,73 @@ public class Level3Controller {
         if (!itemSupportsAction(PlayerActionType.USE_MEDKIT, item)) {
             return name + " has no selected medical supplies.";
         }
+        // heal() clamps to MAX_HEALTH, so using one at full health would burn the kit for nothing
+        if (self.health >= Player.MAX_HEALTH) {
+            return name + " is already at full health; the medkit stays sealed.";
+        }
+        float before = self.health;
         self.heal(item.getHealAmount());
         removeItemAt(side, slot);
         recordConsumedSlot(side, slot);
+        Gdx.app.log("Level3MedkitTrace", "side=" + side + " slot=" + slot
+            + " item=" + item.getName() + " heal=" + item.getHealAmount()
+            + " health " + before + " -> " + self.health);
         return name + " uses the " + item.getName() + " and restores health.";
+    }
+
+    // The ammo rule both attack rows share. Returns null when a round was spent and the attack can
+    // go ahead, or the line to report when the turn is spent reloading instead
+    private String spendRoundOrReload(Gun weapon, String name) {
+        if (weapon.getMagazineRounds() > 0) {
+            weapon.useTurnBasedRound();
+            return null;
+        }
+        if (weapon.getSpareRounds() > 0) {
+            weapon.reloadForTurn();
+            return name + " runs the sidearm dry and spends the turn reloading.";
+        }
+        return name + " finds the sidearm empty, with nothing left to load.";
+    }
+
+    // Rare Plating seals an operator for the rest of the encounter: no Warden damage reaches them
+    private String usePlating(Player self, int slot) {
+        int side = self == player1 ? 1 : 2;
+        InventoryItem item = itemAt(inventories, side, slot);
+        String name = callSignOf(self);
+        if (!itemSupportsAction(PlayerActionType.USE_PLATING, item)) {
+            return name + " has no rare plating to seal into.";
+        }
+        if (plated[side - 1]) return name + " is already sealed in rare plating.";
+        plated[side - 1] = true;
+        removeItemAt(side, slot);
+        recordConsumedSlot(side, slot);
+        addProgress(5f, 5f);
+        Gdx.app.log("Level3PlatingTrace", "side=" + side + " slot=" + slot
+            + " sealed - no further Warden damage reaches this operator");
+        return name + " " + PlayerActionType.USE_PLATING.flavorVerb()
+            + "; nothing the Warden fields will reach them again.";
+    }
+
+    // One charge, one turret. A blocked attempt still costs the turn but never spends the charge
+    private String useTnt(Player self, int slot) {
+        int side = self == player1 ? 1 : 2;
+        InventoryItem item = itemAt(inventories, side, slot);
+        String name = callSignOf(self);
+        if (!itemSupportsAction(PlayerActionType.USE_TNT, item)) {
+            return name + " has no demolition charge selected.";
+        }
+        if (turret.getActiveCount() == 0) {
+            return name + " finds no turret left to bring down.";
+        }
+
+        damageTurret(TNT_DAMAGE);
+        removeItemAt(side, slot);
+        recordConsumedSlot(side, slot);
+        addProgress(8f, 8f);
+        Gdx.app.log("SecurityTurretTrace", "TNT destroyed turretID=" + turretDamagedIndex
+            + " remaining=" + turret.getActiveCount());
+        return name + " " + PlayerActionType.USE_TNT.flavorVerb()
+            + "; the housing blows open and the turret goes dark.";
     }
 
     private String useShield(Player self) {
@@ -1035,11 +1180,16 @@ public class Level3Controller {
         else p2ConsumedSlot = slot;
     }
 
+    // Rare Plating is deliberately NOT a shield any more: Use Shield is the one-round brace,
+    // Use Rare Plating seals the operator for the rest of the fight. Two rows, two effects
     private static boolean isShieldItem(InventoryItem item) {
         if (item == null) return false;
         String name = item.getName();
-        return "Shield".equalsIgnoreCase(name) || "Shield Cell".equalsIgnoreCase(name)
-            || "Rare Plating".equalsIgnoreCase(name);
+        return "Shield".equalsIgnoreCase(name) || "Shield Cell".equalsIgnoreCase(name);
+    }
+
+    private static boolean isPlatingItem(InventoryItem item) {
+        return item != null && "Rare Plating".equalsIgnoreCase(item.getName());
     }
 
     private void resolveWardenAction() {
@@ -1091,8 +1241,8 @@ public class Level3Controller {
             case INCREASE_CONTAINMENT_WARNING:
                 warden.playAttackFlash();
                 wardenAttacked = true;
-                applyWardenDamage(player1, 6f);
-                applyWardenDamage(player2, 6f);
+                applyWardenDamage(player1, CONTAINMENT_WARNING_DAMAGE);
+                applyWardenDamage(player2, CONTAINMENT_WARNING_DAMAGE);
                 wardenLine = "The Warden " + action.flavorVerb() + "; the floor lights red.";
                 break;
             default:
@@ -1182,7 +1332,7 @@ public class Level3Controller {
         if (reactionBlocksDamage) {
             Gdx.app.log("DefenseDroneTrace", "damage blocked targetSide=" + reactionTargetSide);
         } else {
-            applyWardenDamage(target, 9f);
+            applyWardenDamage(target, DRONE_DAMAGE);
             damageAppliedTargetSide = reactionTargetSide;
             Gdx.app.log("DefenseDroneTrace", "damage applied targetSide=" + reactionTargetSide
                 + " health=" + target.health);
@@ -1193,6 +1343,8 @@ public class Level3Controller {
     }
 
     private void applyWardenDamage(Player target, float base) {
+        // Rare Plating is absolute and permanent: nothing the Warden fields gets through
+        if (plated[(target == player1 ? 1 : 2) - 1]) return;
         float damage = base * nextWardenDamageMultiplier;
         boolean braced = target == player1 ? p1Braced : p2Braced;
         if (braced) damage *= 0.5f;
@@ -1244,7 +1396,10 @@ public class Level3Controller {
                 reactionTargetSide, reactionSelectionOrdinal, damageAppliedTargetSide,
                 turretAiming ? turretEventUnit : reactionUnitIndex,
                 restorationStarted, restorationCompleted));
-            if (gun != null) hostSession.send(gun.toMessage());
+            if (sidearms != null) {
+                hostSession.send(sidearms.forSide(1).toMessage());
+                hostSession.send(sidearms.forSide(2).toMessage());
+            }
         }
         wardenAttacked = false;
         wardenDamaged = false;
@@ -1273,6 +1428,8 @@ public class Level3Controller {
         nextWardenDamageMultiplier = 1f;
         p1Braced = false;
         p2Braced = false;
+        // Plating is permanent within a run, so a restart is the only thing that clears it
+        Arrays.fill(plated, false);
         listenerProtected = false;
         breakerSupported = false;
         pendingDroneTarget = null;

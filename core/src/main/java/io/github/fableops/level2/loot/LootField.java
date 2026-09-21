@@ -27,20 +27,31 @@ public class LootField {
     private static final float KEY_AREA_MARGIN = 90f; // stay clear of spawn/core/socket/exit
     private static final float MIN_LOOT_SEPARATION = 180f; // loot items don't cluster together
     private static final int MAX_PLACEMENT_ATTEMPTS = 200;
-    // Used only if 200 random tries somehow all fail to find a legal spot (extremely unlikely
-    // on this map) - keeps the level completable instead of throwing
-    private static final float[][] FALLBACK_POSITIONS = {
-        {700f, 724f}, {200f, 830f}, {350f, 564f}, {950f, 564f}, {1100f, 400f}
-    };
+    // A full loot table needs more well-spaced floor than a 1536x1024 maze has, so placement
+    // relaxes the spacing rule in steps instead of giving up and stacking everything on fixed
+    // points. 70 is just over MARKER_SIZE, so even the tightest pass never overlaps two markers
+    private static final float[] SEPARATION_STEPS = {MIN_LOOT_SEPARATION, 110f, 70f};
+    // Only if the map has no legal loot floor at all, which would be a broken collision mask
+    private static final float[] FALLBACK_POSITION = {700f, 724f};
+
+    // The loot table. Counts live here so the mix can be retuned without touching placement
+    private static final int SIDEARM_COUNT = 2;
+    private static final int AMMO_CACHE_COUNT = 2;
+    private static final int MED_KIT_COUNT = 4;      // two each for a two-operator team
+    private static final int SHIELD_CELL_COUNT = 4;
+    private static final int RARE_PLATING_COUNT = 2;
+    // One charge takes down one turret, and an encounter rolls 2-4 of them. Three covers the
+    // common case; the Sidearm reaction is the backstop when a run rolls four
+    private static final int TNT_COUNT = 3;
 
     private final Texture gunIcon = new Texture(Gdx.files.internal("LootWeapon.png"));
     private final Texture ammoCacheIcon = new Texture(Gdx.files.internal("LootAmmoCache.png"));
     private final Texture medKitIcon = new Texture(Gdx.files.internal("LootMedkit.png"));
     private final Texture shieldCellIcon = new Texture(Gdx.files.internal("LootShieldCell.png"));
     private final Texture premiumShieldIcon = new Texture(Gdx.files.internal("LootPremiumShield.png"));
+    private final Texture tntIcon = new Texture(Gdx.files.internal("LootTNT.png"));
 
     private final List<LootDrop> drops = new ArrayList<>();
-    private final LootDrop gunDrop;
     private float glowTime = 0f;
 
     // Both machines build the same list from the same seed, so the ids and positions that
@@ -49,32 +60,68 @@ public class LootField {
         Random rng = new Random(seed);
         List<float[]> placed = new ArrayList<>();
 
-        float[] p0 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[0]);
-        // Weapon ownership follows whichever personal inventory currently holds this item.
-        gunDrop = new LootDrop(0, LootTier.MEDIUM, p0[0], p0[1], new InventoryItem("Sidearm",
-            "Fires where you face. Hold attack to shoot, R reloads.", gunIcon, 0f, true), 0);
-        drops.add(gunDrop);
+        int id = 0;
 
-        float[] p1 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[1]);
-        drops.add(new LootDrop(1, LootTier.LOW, p1[0], p1[1], new InventoryItem("Ammo Cache",
-            "Rounds for the sidearm.", ammoCacheIcon, 0f, true), Gun.CACHE_ROUNDS));
+        // Ids are handed out in this order and both machines walk the same list, so the order of
+        // these loops is part of the wire contract - appending a new kind is safe, reordering is not
+        for (int i = 0; i < SIDEARM_COUNT; i++) {
+            float[] spot = randomSpot(world, rng, placed);
+            // Weapon ownership follows whichever personal inventory currently holds this item.
+            drops.add(new LootDrop(id++, LootTier.MEDIUM, spot[0], spot[1], new InventoryItem("Sidearm",
+                "Fires where you face. Hold attack to shoot, R reloads.", gunIcon, 0f, true), 0));
+        }
 
-        float[] p2 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[2]);
-        drops.add(item(2, LootTier.MEDIUM, p2[0], p2[1], "Med kit",
-            "Patches you up. Doesn't need the core.", medKitIcon, 35f));
+        for (int i = 0; i < AMMO_CACHE_COUNT; i++) {
+            float[] spot = randomSpot(world, rng, placed);
+            drops.add(new LootDrop(id++, LootTier.LOW, spot[0], spot[1], new InventoryItem("Ammo Cache",
+                "Rounds for the sidearm.", ammoCacheIcon, 0f, true), Gun.CACHE_ROUNDS));
+        }
 
-        float[] p3 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[3]);
-        drops.add(item(3, LootTier.MEDIUM, p3[0], p3[1], "Shield Cell",
-            "A temporary shield charge.", shieldCellIcon, 0f));
+        for (int i = 0; i < MED_KIT_COUNT; i++) {
+            float[] spot = randomSpot(world, rng, placed);
+            drops.add(item(id++, LootTier.MEDIUM, spot[0], spot[1], "Med kit",
+                "Patches you up. Doesn't need the core.", medKitIcon, 35f));
+        }
 
-        float[] p4 = randomSpot(world, rng, placed, FALLBACK_POSITIONS[4]);
-        drops.add(item(4, LootTier.HIGH, p4[0], p4[1], "Rare Plating",
-            "Rare armour. Only appears while the core is carried.", premiumShieldIcon, 0f));
+        for (int i = 0; i < SHIELD_CELL_COUNT; i++) {
+            float[] spot = randomSpot(world, rng, placed);
+            drops.add(item(id++, LootTier.MEDIUM, spot[0], spot[1], "Shield Cell",
+                "A temporary shield charge.", shieldCellIcon, 0f));
+        }
+
+        for (int i = 0; i < RARE_PLATING_COUNT; i++) {
+            float[] spot = randomSpot(world, rng, placed);
+            drops.add(item(id++, LootTier.HIGH, spot[0], spot[1], "Rare Plating",
+                "Rare armour. Only appears while the core is carried.", premiumShieldIcon, 0f));
+        }
+
+        for (int i = 0; i < TNT_COUNT; i++) {
+            float[] spot = randomSpot(world, rng, placed);
+            drops.add(item(id++, LootTier.HIGH, spot[0], spot[1], "TNT",
+                "Demolition charge. Takes down one turret once the drones are grounded.",
+                tntIcon, 0f));
+        }
     }
 
     // Tries random points until Level2Map's own collision mask says one is legal floor, clear of
-    // every objective zone, and far enough from loot already placed this session
-    private static float[] randomSpot(Level2Map world, Random rng, List<float[]> placed, float[] fallback) {
+    // every objective zone, and far enough from loot already placed this session. Each step down
+    // SEPARATION_STEPS is a fresh set of attempts at a looser spacing, so early drops spread out
+    // properly and later ones still land on real randomised floor instead of a fixed point.
+    // Both machines run this identically from the same seed, so the draws stay in lockstep
+    private static float[] randomSpot(Level2Map world, Random rng, List<float[]> placed) {
+        for (float separation : SEPARATION_STEPS) {
+            float[] spot = tryPlace(world, rng, placed, separation);
+            if (spot != null) {
+                placed.add(spot);
+                return spot;
+            }
+        }
+        float[] fallback = {FALLBACK_POSITION[0], FALLBACK_POSITION[1]};
+        placed.add(fallback);
+        return fallback;
+    }
+
+    private static float[] tryPlace(Level2Map world, Random rng, List<float[]> placed, float separation) {
         float minX = WORLD_EDGE_MARGIN;
         float maxX = world.getWorldWidth() - WORLD_EDGE_MARGIN;
         float minY = WORLD_EDGE_MARGIN;
@@ -84,17 +131,14 @@ public class LootField {
             float x = minX + rng.nextFloat() * (maxX - minX);
             float y = minY + rng.nextFloat() * (maxY - minY);
             if (!world.isLootSpot(x, y, MARKER_SIZE, KEY_AREA_MARGIN)) continue;
-            if (tooCloseToPlaced(placed, x, y)) continue;
-            float[] spot = {x, y};
-            placed.add(spot);
-            return spot;
+            if (tooCloseToPlaced(placed, x, y, separation)) continue;
+            return new float[]{x, y};
         }
-        placed.add(fallback);
-        return fallback;
+        return null;
     }
 
-    private static boolean tooCloseToPlaced(List<float[]> placed, float x, float y) {
-        float minDistSq = MIN_LOOT_SEPARATION * MIN_LOOT_SEPARATION;
+    private static boolean tooCloseToPlaced(List<float[]> placed, float x, float y, float separation) {
+        float minDistSq = separation * separation;
         for (float[] p : placed) {
             float dx = p[0] - x;
             float dy = p[1] - y;
@@ -152,8 +196,9 @@ public class LootField {
         return null;
     }
 
+    // Matched by name rather than by reference, so every Sidearm drop grants the weapon
     public boolean isGun(LootDrop drop) {
-        return drop == gunDrop;
+        return "Sidearm".equalsIgnoreCase(drop.getItem().getName());
     }
 
     // Item definitions remain available after pickup so later levels can render a category preview
@@ -193,5 +238,6 @@ public class LootField {
         medKitIcon.dispose();
         shieldCellIcon.dispose();
         premiumShieldIcon.dispose();
+        tntIcon.dispose();
     }
 }

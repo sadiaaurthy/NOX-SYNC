@@ -21,7 +21,7 @@ import io.github.fableops.inventory.Inventory;
 import io.github.fableops.inventory.InventoryItem;
 import io.github.fableops.inventory.PlayerInventories;
 import io.github.fableops.inventory.network.InventoryTransferMessage;
-import io.github.fableops.level2.Gun;
+import io.github.fableops.level2.Sidearms;
 import io.github.fableops.level2.loot.LootField;
 import io.github.fableops.level2.network.GunStateMessage;
 import io.github.fableops.level3.network.Level3ActionMessage;
@@ -76,7 +76,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private final PlayerInventories inventories;
     private final Level3Map world = new Level3Map();
     private final Hud hud;
-    private final Gun gun;
+    private final Sidearms sidearms;
     // Owns the icon textures referenced by carried Level 2 InventoryItems.
     private final LootField carriedLootAssets;
     private final InventoryItem[] itemDefinitions;
@@ -178,12 +178,12 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             new Player(sideOneRole.sheetName(), 0f, 0f, Input.Keys.W, Input.Keys.S, Input.Keys.A, Input.Keys.D, null, 1),
             new Player(sideOneRole.other().sheetName(), 0f, 0f, Input.Keys.UP, Input.Keys.DOWN,
                 Input.Keys.LEFT, Input.Keys.RIGHT, null, 2),
-            new Hud(), new PlayerInventories(), new Gun(), null);
+            new Hud(), new PlayerInventories(), new Sidearms(), null);
     }
 
     public Level3Screen(GameServer server, GameClient client, HostSession hostSession, ClientSession clientSession,
                         StoryGate story, Role sideOneRole, Player player1, Player player2,
-                        Hud hud, PlayerInventories inventories, Gun gun, LootField carriedLootAssets) {
+                        Hud hud, PlayerInventories inventories, Sidearms sidearms, LootField carriedLootAssets) {
         this.sideOneRole = sideOneRole;
         this.server = server;
         this.client = client;
@@ -196,25 +196,39 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         this.player2 = player2;
         this.hud = hud;
         this.inventories = inventories;
-        this.gun = gun;
+        this.sidearms = sidearms;
         this.carriedLootAssets = carriedLootAssets;
         if (carriedLootAssets != null) {
             this.ownedItemDefinitionTextures = null;
+            // One entry per TurnPanel.InventoryCategory, in ordinal order - it is indexed by
+            // category.ordinal(). Adding a category without adding its row here is an out-of-bounds
             this.itemDefinitions = new InventoryItem[]{
                 carriedLootAssets.itemDefinition("Sidearm"),
                 carriedLootAssets.itemDefinition("Shield Cell"),
-                carriedLootAssets.itemDefinition("Med kit")
+                carriedLootAssets.itemDefinition("Med kit"),
+                carriedLootAssets.itemDefinition("TNT")
             };
         } else {
             Texture sidearmIcon = new Texture(Gdx.files.internal("LootWeapon.png"));
             Texture shieldIcon = new Texture(Gdx.files.internal("LootShieldCell.png"));
             Texture medkitIcon = new Texture(Gdx.files.internal("LootMedkit.png"));
-            this.ownedItemDefinitionTextures = new Texture[]{sidearmIcon, shieldIcon, medkitIcon};
+            Texture tntIcon = new Texture(Gdx.files.internal("LootTNT.png"));
+            this.ownedItemDefinitionTextures =
+                new Texture[]{sidearmIcon, shieldIcon, medkitIcon, tntIcon};
+            // Same contract as above: one entry per category, in ordinal order
             this.itemDefinitions = new InventoryItem[]{
                 new InventoryItem("Sidearm", "Fires where you face.", sidearmIcon, 0f, true),
                 new InventoryItem("Shield Cell", "A temporary shield charge.", shieldIcon, 0f, true),
-                new InventoryItem("Med kit", "Patches you up.", medkitIcon, 35f, true)
+                new InventoryItem("Med kit", "Patches you up.", medkitIcon, 35f, true),
+                new InventoryItem("TNT", "Takes down one turret.", tntIcon, 0f, true)
             };
+        }
+        // itemDefinitions is indexed by InventoryCategory.ordinal(). Catch a missing row the moment
+        // Level 3 loads instead of when a player happens to scroll onto that category mid-fight
+        if (itemDefinitions.length != TurnPanel.InventoryCategory.values().length) {
+            throw new IllegalStateException("itemDefinitions has " + itemDefinitions.length
+                + " entries but there are " + TurnPanel.InventoryCategory.values().length
+                + " inventory categories. Add one entry per category, in ordinal order.");
         }
         this.activeMenuSide = 1;
         this.turnPanel = new TurnPanel(hud.font());
@@ -232,7 +246,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         world.placeAtSpawn(player2, false);
 
         if (isHost || isDebug) {
-            controller = new Level3Controller(hostSession, world, inventories, gun, player1, player2, sideOneRole);
+            controller = new Level3Controller(hostSession, world, inventories, sidearms, player1, player2, sideOneRole);
             wardenVisual = controller.getWarden();
             droneVisual = controller.getDrone();
             turretVisual = controller.getTurret();
@@ -262,7 +276,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 applyTurnState(Level3TurnStateMessage.deserialize(body));
                 break;
             case "GUN_STATE":
-                gun.apply(GunStateMessage.deserialize(body));
+                sidearms.apply(GunStateMessage.deserialize(body));
                 break;
             case "INVENTORY_TRANSFER": {
                 InventoryTransferMessage transfer = InventoryTransferMessage.deserialize(body);
@@ -433,7 +447,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         inventories.handleInput(isHost || isDebug, !isHost || isDebug, inputBlocked, player1, player2);
         player1.updateVisualState(delta);
         player2.updateVisualState(delta);
-        gun.update(delta);
+        sidearms.update(delta);
         if (bossStarted) syncInputState(delta);
 
         if (isDebug) updateAsDebug(delta);
@@ -668,7 +682,10 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         if (!bossStarted || missionFailed || endingStarted
             || inputState != InputState.NORMAL_GAMEPLAY
             || storyBanner.isOpen() || logPopup.isOpen()) return false;
-        if (reactionOpen()) return localCanRespondToReaction();
+        // A reaction menu can only offer carried equipment. With none to offer, opening it would
+        // strand the operator on a column of x0 rows with no visible way out, so T stays shut and
+        // the ENTER "take the hit" fallback in handleReactionInput stays reachable instead
+        if (reactionOpen()) return localCanRespondToReaction() && localReactionHasEquipment();
         if (phase() != TurnManager.Phase.PLAYER_TURN) return false;
         return soloControl() ? !(confirmed(1) && confirmed(2)) : !confirmed(isHost ? 1 : 2);
     }
@@ -764,6 +781,15 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         }
     }
 
+    // Whether the targeted operator carries anything a reaction could actually use. Only meaningful
+    // while a reaction is open, since reactionAvailability reads reactionTargetSide
+    private boolean localReactionHasEquipment() {
+        boolean[] available = reactionAvailability();
+        return available[ReactionType.SIDEARM.ordinal()]
+            || available[ReactionType.SHIELD.ordinal()]
+            || available[ReactionType.MEDKIT.ordinal()];
+    }
+
     // ENTER-only fallback for a reaction with no usable equipment: take the hit.
     private void handleReactionInput() {
         if (!reactionOpen() || !localCanRespondToReaction()) return;
@@ -844,17 +870,28 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             ? Gdx.input.isKeyJustPressed(Input.Keys.X)
             : category == TurnPanel.InventoryCategory.SHIELD
                 ? Gdx.input.isKeyJustPressed(Input.Keys.H)
-                : Gdx.input.isKeyJustPressed(Input.Keys.M);
+                : category == TurnPanel.InventoryCategory.TNT
+                    ? Gdx.input.isKeyJustPressed(Input.Keys.B)
+                    : Gdx.input.isKeyJustPressed(Input.Keys.M);
         if (!activate) return;
         Gdx.app.log("InputTrace", "key=" + activationKey(category) + " actionTriggered=true");
 
         int side = selectedItemSide;
+        // The sidearm is no longer a turn action of its own - Disable Drone spends its rounds. It
+        // is still a valid answer to an incoming attack, so it only activates during a reaction
+        if (category == TurnPanel.InventoryCategory.SIDEARM && !reactionOpen()) {
+            Gdx.app.log("Level3TurnMenuTrace", "Sidearm is not a turn action; "
+                + "Disable Drone fires it, and it answers incoming attacks");
+            return;
+        }
         int slot = firstPersonalCompatibleSlot(side, actionForCategory(side, category));
         if (slot < 0) return;
         if (reactionOpen()) {
             // Only the targeted player's activation answers the alert.
             if (side != reactionTargetSide()) return;
+            // TNT is a turn action, not a defensive response, so it has no reaction mapping
             ReactionType reaction = reactionForCategory(selectedItemCategory);
+            if (reaction == null) return;
             restoreGameplayInput("reaction item activated");
             confirmReaction(reaction);
             return;
@@ -892,6 +929,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             case SHIELD:
                 return role == Role.BREAKER ? PlayerActionType.BREAKER_SHIELD_DEFENSE
                     : PlayerActionType.LISTENER_SHIELD_DEFENSE;
+            case TNT:
+                return PlayerActionType.USE_TNT;
             case MEDKIT:
                 return PlayerActionType.USE_MEDKIT;
             default:
@@ -930,7 +969,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         int[] quantities = inventoryQuantities(side);
         boolean[] available = new boolean[ReactionType.values().length];
         available[ReactionType.NONE.ordinal()] = true;
-        available[ReactionType.SIDEARM.ordinal()] = gun.hasAmmo()
+        available[ReactionType.SIDEARM.ordinal()] = sidearms.forSide(side).hasAmmo()
             && quantities[TurnPanel.InventoryCategory.SIDEARM.ordinal()] > 0;
         available[ReactionType.SHIELD.ordinal()] =
             quantities[TurnPanel.InventoryCategory.SHIELD.ordinal()] > 0;
@@ -1019,7 +1058,9 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         return side == 1 ? p1InventoryFocus : p2InventoryFocus;
     }
 
+    // Only a reaction has a second column to move to
     private void toggleInventoryFocus(int side) {
+        if (!menuIsReaction) return;
         if (side == 1) p1InventoryFocus = !p1InventoryFocus;
         else p2InventoryFocus = !p2InventoryFocus;
         if (inventoryFocused(side)) logInventorySelection(side);
@@ -1083,6 +1124,14 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         if (Level3Controller.requiresEquipment(action)) {
             int firstSlot = Level3Controller.firstCompatibleSlot(inventories, side, action);
             if (firstSlot < 0) return;
+            // With a single candidate there is nothing to choose between, so the picker would only
+            // add a second confirm the player has no reason to expect. Commit straight away
+            if (Level3Controller.compatibleSlotCount(inventories, side, action) <= 1) {
+                Gdx.app.log("Level3TurnMenuTrace", action.label()
+                    + " has one candidate (slot " + firstSlot + "); skipping the equipment picker");
+                confirmAction(side, action, firstSlot);
+                return;
+            }
             equipmentOpen = true;
             equipmentSide = side;
             equipmentAction = action;
@@ -1190,7 +1239,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
 
     private PlayerActionType[] actionsFor(int side) {
         Role role = side == 1 ? sideOneRole : sideOneRole.other();
-        return Level3Controller.availableActions(inventories, gun, side, role);
+        return Level3Controller.availableActions(inventories, sidearms, side, role);
     }
 
     private int[] inventoryQuantities(int side) {
@@ -1238,6 +1287,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 return Level3Controller.itemSupportsAction(
                     role == Role.BREAKER ? PlayerActionType.BREAKER_SHIELD_DEFENSE
                         : PlayerActionType.LISTENER_SHIELD_DEFENSE, item);
+            case TNT:
+                return Level3Controller.itemSupportsAction(PlayerActionType.USE_TNT, item);
             case MEDKIT:
                 return Level3Controller.itemSupportsAction(PlayerActionType.USE_MEDKIT, item);
             default:
@@ -1403,13 +1454,13 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     public void drawHalf(OrthographicCamera camera) {
         world.render(batch, camera);
         world.renderOverlays(shape, camera, bossStarted);
-        if (gun.hasShotToDraw() || turretVisual.hasLaserToDraw()
+        if (sidearms.hasShotToDraw() || turretVisual.hasLaserToDraw()
             || turretVisual.hasWarningToDraw() || recoverBoltTimer > 0f) {
             Gdx.gl.glEnable(GL20.GL_BLEND);
             Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
             shape.setProjectionMatrix(camera.combined);
             shape.begin(ShapeRenderer.ShapeType.Filled);
-            if (gun.hasShotToDraw()) gun.drawShot(shape);
+            sidearms.drawShots(shape);
             if (turretVisual.hasWarningToDraw()) turretVisual.drawWarning(shape);
             if (turretVisual.hasLaserToDraw()) turretVisual.drawLaser(shape);
             if (recoverBoltTimer > 0f) drawRecoverMemorySequence(shape);
@@ -1450,7 +1501,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         TurnPromptRenderer.render(hud, shape, batch, ui, TITLE, objective(), turnMenuAvailable(),
             turnPromptHint());
         hud.drawPlayerCards(shape, batch, ui, player1, player2, sideOneRole);
-        gun.drawHud(shape, batch, hud.font(), ui.width());
+        sidearms.drawHuds(shape, batch, hud.font(), ui.width());
 
         if (bossStarted && inputState == InputState.TURN_MENU_OPEN && !equipmentOpen) {
             int[] p1Quantities = inventoryQuantities(1);
@@ -1463,12 +1514,12 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 actionsFor(1), actionsFor(2), activeMenuSide, soloControl(),
                 authorizationUnlocked(), authorizationLockReason(),
                 p1InventorySelected, p2InventorySelected, p1InventoryFocus, p2InventoryFocus,
-                p1Quantities, p2Quantities);
+                p1Quantities, p2Quantities, reactionMenu);
         }
         if (equipmentOpen) {
             Role role = equipmentSide == 1 ? sideOneRole : sideOneRole.other();
             equipmentPanel.render(shape, batch, ui, equipmentSide, role.name(), equipmentAction,
-                inventories, equipmentSelectedSlot, gun,
+                inventories, equipmentSelectedSlot, sidearms.forSide(equipmentSide),
                 equipmentSide == 1 ? SplitScreen.ACCENT_P1 : SplitScreen.ACCENT_P2);
         }
         if (!reactionOpen()) lastPromptLogSignature = "";
@@ -1488,6 +1539,13 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             ReactionPanel panel = selectedItemSide == 1 ? reactionPanelP1 : reactionPanelP2;
             panel.renderActivationHeader(batch, ui, activationInstruction(category));
         }
+        // The T reminder is gone in this case (turnMenuAvailable is false), so say what does work
+        if (bossStarted && reactionOpen() && localCanRespondToReaction()
+            && inputState == InputState.NORMAL_GAMEPLAY && !localReactionHasEquipment()
+            && !storyBanner.isOpen() && !logPopup.isOpen()) {
+            ReactionPanel panel = reactionTargetSide() == 1 ? reactionPanelP1 : reactionPanelP2;
+            panel.renderActivationHeader(batch, ui, "NO EQUIPMENT - PRESS ENTER TO TAKE THE HIT");
+        }
         inventories.render(shape, batch, ui.width(), ui.height(), player1, player2,
             SplitScreen.ACCENT_P1, SplitScreen.ACCENT_P2);
         storyBanner.render(shape, batch, ui.width(), ui.height());
@@ -1500,6 +1558,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             case SIDEARM: return "Ranged security sidearm.";
             case SHIELD: return "Protection equipment.";
             case MEDKIT: return "Medical recovery supplies.";
+            case TNT: return "Demolition charge. Takes down one turret.";
             default: return "Equipment unavailable.";
         }
     }
@@ -1509,6 +1568,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             case SIDEARM: return "PRESS X TO FIRE SIDE ARM";
             case SHIELD: return "PRESS H TO ACTIVATE SHIELD";
             case MEDKIT: return "PRESS M TO USE MEDKIT";
+            case TNT: return "PRESS B TO DETONATE TNT";
             default: return "";
         }
     }
@@ -1518,6 +1578,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             case SIDEARM: return "X";
             case SHIELD: return "H";
             case MEDKIT: return "M";
+            case TNT: return "B";
             default: return "UNKNOWN";
         }
     }

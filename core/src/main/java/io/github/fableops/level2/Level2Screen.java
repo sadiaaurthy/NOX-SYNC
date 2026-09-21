@@ -51,7 +51,9 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
 
     private static final float ATTACK_RANGE = 120f;
     private static final int ATTACK_DAMAGE = 15;
-    private static final int CONTACT_DAMAGE = 10; // per second of contact
+    // Per second of contact. Med kits can undo some of this, unlike Level 1, but the maze corners
+    // you far more often - and the wave interval halves once the core is off its pedestal
+    private static final int CONTACT_DAMAGE = 6;
     // A wave comes in around each player this often. Taking the core keeps the pressure up by
     // shortening the gap rather than by sending bigger groups: one enemy every 5s instead of
     // every 8s is still 1.6x the pre-core rate, but they arrive alone and can be fought one at a time
@@ -80,7 +82,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     private final Level2Map world = new Level2Map();
     private final CoreObject core;
     private final LootField loot;
-    private final Gun gun = new Gun();
+    private final Sidearms sidearms = new Sidearms();
     private final Hud hud;
     private final EnemySprites enemySprites;
     private final SwarmController swarm;
@@ -165,7 +167,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
 
         // Replace Level 1's listeners, that screen is disposed
         if (isHost || isDebug) {
-            controller = new Level2Controller(hostSession, core, loot, gun, inventories, world, player1, player2);
+            controller = new Level2Controller(hostSession, core, loot, sidearms, inventories, world, player1, player2);
             inventories.setTransferHandler((side, fromShared, slot) -> controller.transferInventory(
                 new InventoryTransferMessage(side, fromShared, slot)));
             if (hostSession != null) hostSession.setListener(story.wrap(controller.asMessageListener()));
@@ -202,7 +204,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
                 checkForDeath();
                 break;
             case "GUN_STATE":
-                gun.apply(GunStateMessage.deserialize(body));
+                sidearms.apply(GunStateMessage.deserialize(body));
                 break;
             case "INVENTORY_TRANSFER": {
                 InventoryTransferMessage transfer = InventoryTransferMessage.deserialize(body);
@@ -236,7 +238,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         inventories.handleInput(isHost || isDebug, !isHost || isDebug, missionFailed, player1, player2);
         core.update(delta);
         loot.update(delta);
-        gun.update(delta);
+        sidearms.update(delta);
         player1.updateVisualState(delta);
         player2.updateVisualState(delta);
 
@@ -273,7 +275,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         story.begin(StoryBeat.LEVEL_3);
         if (hostSession != null) hostSession.send(new Level3StartMessage());
         Level3Screen next = new Level3Screen(server, client, hostSession, clientSession, story, sideOneRole,
-            player1, player2, hud, inventories, gun, loot);
+            player1, player2, hud, inventories, sidearms, loot);
         disposed = true;
         disposeLevel2OnlyResources(false);
         game.setScreen(next);
@@ -332,8 +334,8 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
 
     // Attack shoots while this player holds the gun with ammo left, otherwise it's a melee swing
     private void act(int playerId, Player player, boolean attack, boolean reload) {
-        if (reload) gun.reload(playerId);
-        if (!attack || gun.trigger(playerId, player, swarm, world)) return;
+        if (reload) sidearms.forSide(playerId).reload(playerId);
+        if (!attack || sidearms.forSide(playerId).trigger(playerId, player, swarm, world)) return;
         if (player.startAttack()) {
             swarm.attackNearest(0, player.centreX(), player.centreY(), ATTACK_RANGE, ATTACK_DAMAGE);
         }
@@ -358,7 +360,9 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
             swarm.positions(1, positionBufferP1),
             swarm.positions(2, positionBufferP2),
             player1.health, player2.health));
-        if (gun.getOwner() != 0) hostSession.send(gun.toMessage());
+        for (int side = 1; side <= 2; side++) {
+            if (sidearms.forSide(side).getOwner() != 0) hostSession.send(sidearms.forSide(side).toMessage());
+        }
     }
 
     // Taking the core brings the next wave forward as well as every one after it
@@ -456,7 +460,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
         core.set(CoreObject.State.ON_PEDESTAL, 0);
         inventories.clear();
         loot.reset();
-        gun.reset();
+        sidearms.reset();
         swarm.reset();
         remoteEnemiesP1.clear();
         remoteEnemiesP2.clear();
@@ -551,7 +555,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
     // is part of the map image, and while carried it's in the inventory
     private void drawEffects(OrthographicCamera camera) {
         boolean coreInSocket = core.getState() == CoreObject.State.IN_SOCKET;
-        if (!coreInSocket && !gun.hasShotToDraw()) return;
+        if (!coreInSocket && !sidearms.hasShotToDraw()) return;
 
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
@@ -561,7 +565,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
             Rectangle socket = world.getSocketZone();
             core.draw(shape, socket.x + socket.width / 2f, socket.y + socket.height / 2f);
         }
-        gun.drawShot(shape);
+        sidearms.drawShots(shape);
         shape.end();
         Gdx.gl.glDisable(GL20.GL_BLEND);
     }
@@ -576,7 +580,7 @@ public class Level2Screen implements Screen, SplitScreen.HalfRenderer {
             ? 1f - coreTimer / CORE_TIME_LIMIT : -1f;
         hud.drawBanner(shape, batch, ui, TITLE, objective(), localPrompt, coreMeter);
         hud.drawPlayerCards(shape, batch, ui, player1, player2, sideOneRole);
-        gun.drawHud(shape, batch, hud.font(), ui.width());
+        sidearms.drawHuds(shape, batch, hud.font(), ui.width());
         inventories.render(shape, batch, ui.width(), ui.height(), player1, player2,
             SplitScreen.ACCENT_P1, SplitScreen.ACCENT_P2);
     }

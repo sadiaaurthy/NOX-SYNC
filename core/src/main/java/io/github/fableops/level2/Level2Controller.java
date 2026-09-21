@@ -19,18 +19,18 @@ public class Level2Controller {
     private final HostSession hostSession;
     private final CoreObject core;
     private final LootField loot;
-    private final Gun gun;
+    private final Sidearms sidearms;
     private final PlayerInventories inventories;
     private final Level2Map world;
     private final Player player1;
     private final Player player2;
 
-    public Level2Controller(HostSession hostSession, CoreObject core, LootField loot, Gun gun,
+    public Level2Controller(HostSession hostSession, CoreObject core, LootField loot, Sidearms sidearms,
                             PlayerInventories inventories, Level2Map world, Player player1, Player player2) {
         this.hostSession = hostSession;
         this.core = core;
         this.loot = loot;
-        this.gun = gun;
+        this.sidearms = sidearms;
         this.inventories = inventories;
         this.world = world;
         this.player1 = player1;
@@ -57,10 +57,12 @@ public class Level2Controller {
     public void transferInventory(InventoryTransferMessage message) {
         if (!inventories.applyTransfer(message.getPlayerSide(), message.isFromShared(),
             message.getPersonalSlot())) return;
-        gun.giveTo(inventories.currentHolder("Sidearm"));
+        // A Sidearm can change hands through the shared slot, so re-read who is armed on both sides
+        sidearms.syncOwnership(inventories);
         if (hostSession != null) {
             hostSession.send(message);
-            hostSession.send(gun.toMessage());
+            hostSession.send(sidearms.forSide(1).toMessage());
+            hostSession.send(sidearms.forSide(2).toMessage());
         }
     }
 
@@ -96,9 +98,13 @@ public class Level2Controller {
         if (drop == null || drop.getId() != lootId) return;
 
         loot.applyPickup(drop.getId(), playerId, inventories);
-        // The gun belongs to whoever picks it up, and a cache loads it whoever grabs that
-        if (loot.isGun(drop)) gun.giveTo(playerId);
-        gun.addSpare(drop.getAmmo());
-        if (hostSession != null) hostSession.send(new LootPickedUpMessage(drop.getId(), playerId));
+        // Each operator arms their own weapon, and a cache loads the gun of whoever grabbed it -
+        // including before they have found a Sidearm, so the rounds are waiting when they do
+        if (loot.isGun(drop)) sidearms.forSide(playerId).giveTo(playerId);
+        sidearms.forSide(playerId).addSpare(drop.getAmmo());
+        if (hostSession != null) {
+            hostSession.send(new LootPickedUpMessage(drop.getId(), playerId));
+            hostSession.send(sidearms.forSide(playerId).toMessage());
+        }
     }
 }

@@ -73,6 +73,17 @@ public class PlayerInventories {
     }
 
     // 0 means the item is in the shared slot or absent; only personal possession owns the weapon.
+    // Whether one specific side carries the named item. currentHolder answers "who has it" and so
+    // can only name one side; with a weapon per operator both sides can hold one at the same time
+    public boolean holds(int side, String itemName) {
+        Inventory inventory = forPlayer(side);
+        for (int slot = 0; slot < Inventory.CAPACITY; slot++) {
+            InventoryItem item = inventory.get(slot);
+            if (item != null && itemName.equalsIgnoreCase(item.getName())) return true;
+        }
+        return false;
+    }
+
     public int currentHolder(String itemName) {
         for (int side = 1; side <= 2; side++) {
             Inventory inventory = forPlayer(side);

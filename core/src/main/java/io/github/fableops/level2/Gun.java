@@ -47,7 +47,10 @@ public class Gun {
     private static final Color RED = new Color(1f, 0.33f, 0.33f, 1f);
     private static final Color ORANGE = new Color(1f, 0.6f, 0.2f, 1f);
 
-    private int owner = 0; // current personal-inventory holder; 0 while unclaimed or shared
+    // Which operator this weapon belongs to. Fixed for the life of the instance - there is one Gun
+    // per side, so ammo, reload timers and the ammo-cache bonus never bleed between players
+    private final int side;
+    private int owner = 0; // set to side while that operator carries a Sidearm item, else 0
     private int magazine = MAGAZINE;
     private int spare = START_SPARE;
     private boolean ammoCacheCollected = false;
@@ -66,6 +69,12 @@ public class Gun {
     private int shownSpare = -1;
     private String magazineText = "";
     private String spareText = "";
+
+    public Gun(int side) {
+        this.side = side;
+    }
+
+    public int getSide() { return side; }
 
     public int getOwner() { return owner; }
 
@@ -100,6 +109,14 @@ public class Gun {
         }
         magazine--;
         return true;
+    }
+
+    // Level 3 reload: the operator spends the whole turn on it, so the magazine is simply full
+    // again at the end of it. The real-time RELOAD_TIME timer has no meaning in a turn encounter
+    public void reloadForTurn() {
+        int rounds = Math.min(MAGAZINE - magazine, spare);
+        magazine += rounds;
+        spare -= rounds;
     }
 
     // Level 3 resolves damage through its turn controller, but still uses the existing tracer so a
@@ -210,7 +227,8 @@ public class Gun {
     }
 
     public GunStateMessage toMessage() {
-        return new GunStateMessage(owner, magazine, spare, reloadLeft, shots, fromX, fromY, toX, toY, hit);
+        return new GunStateMessage(side, owner, magazine, spare, reloadLeft, shots,
+            fromX, fromY, toX, toY, hit, ammoCacheCollected);
     }
 
     // Client side
@@ -219,6 +237,8 @@ public class Gun {
         magazine = state.getMagazine();
         spare = state.getSpare();
         reloadLeft = state.getReloadLeft();
+        // Carried into Level 3, where it raises the turn-based damage, so the client has to see it
+        ammoCacheCollected = state.isAmmoCacheCollected();
         if (state.getShots() == shots) return;
 
         shots = state.getShots();
