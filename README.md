@@ -8,7 +8,7 @@ Developed for the CSE 4402: Visual Programming Lab course at the Islamic Univers
 
 ## Presentation Video
 
-* **Video Demonstration:** [INSERT_VIDEO_LINK_HERE]
+* **Video Demonstration:** [https://youtu.be/o09a2ESUpiE]
 * **GitHub Repository:** https://github.com/sadiaaurthy/NOX-SYNC
 
 ---
