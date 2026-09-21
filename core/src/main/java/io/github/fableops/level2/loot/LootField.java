@@ -79,7 +79,7 @@ public class LootField {
 
         for (int i = 0; i < MED_KIT_COUNT; i++) {
             float[] spot = randomSpot(world, rng, placed);
-            drops.add(item(id++, LootTier.MEDIUM, spot[0], spot[1], "Med kit",
+            drops.add(item(id++, LootTier.MEDIUM, spot[0], spot[1], "Medkit",
                 "Patches you up. Doesn't need the core.", medKitIcon, 35f));
         }
 

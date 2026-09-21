@@ -205,7 +205,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             this.itemDefinitions = new InventoryItem[]{
                 carriedLootAssets.itemDefinition("Sidearm"),
                 carriedLootAssets.itemDefinition("Shield Cell"),
-                carriedLootAssets.itemDefinition("Med kit"),
+                carriedLootAssets.itemDefinition("Medkit"),
                 carriedLootAssets.itemDefinition("TNT")
             };
         } else {
@@ -219,7 +219,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             this.itemDefinitions = new InventoryItem[]{
                 new InventoryItem("Sidearm", "Fires where you face.", sidearmIcon, 0f, true),
                 new InventoryItem("Shield Cell", "A temporary shield charge.", shieldIcon, 0f, true),
-                new InventoryItem("Med kit", "Patches you up.", medkitIcon, 35f, true),
+                new InventoryItem("Medkit", "Patches you up.", medkitIcon, 35f, true),
                 new InventoryItem("TNT", "Takes down one turret.", tntIcon, 0f, true)
             };
         }
@@ -545,8 +545,6 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     }
 
     private int listenerSide() { return sideOneRole == Role.LISTENER ? 1 : 2; }
-
-    private int breakerSide() { return sideOneRole == Role.BREAKER ? 1 : 2; }
 
     private Role roleForSide(int side) { return side == 1 ? sideOneRole : sideOneRole.other(); }
 

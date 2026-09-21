@@ -1004,21 +1004,10 @@ public class Level3Controller {
 
     // The Warden is not a health-bar boss. This is only the visual reaction to a direct physical
     // hit after its deployed defenses are clear; narrative progress and meter changes never call it.
-    private boolean strikeWarden() {
-        if (warden.getState().isStoodDown()) return false;
-        warden.playDamagedFlash();
-        wardenDamaged = true;
-        return true;
-    }
-
     // Unused since turn attacks became drone-only: turrets now answer to TNT, or to the Sidearm
     // reaction when one opens fire. Kept as the single place that would re-link the two if that
     // ever changes back
     @SuppressWarnings("unused")
-    private boolean damageDefense(float damage) {
-        return drone.isActive() ? damageDrone(damage) : damageTurret(damage);
-    }
-
     private boolean defensesCleared() {
         return drone.getActiveCount() == 0 && turret.getActiveCount() == 0;
     }
@@ -1370,7 +1359,6 @@ public class Level3Controller {
         wardenActionCursor++;
     }
 
-    private Player higherHealth() { return player1.health >= player2.health ? player1 : player2; }
     private Role roleForSide(int side) { return side == 1 ? sideOneRole : sideOneRole.other(); }
     private Role roleOf(Player player) { return player == player1 ? sideOneRole : sideOneRole.other(); }
     private String callSignOf(Player player) { return roleOf(player).callSign(); }
