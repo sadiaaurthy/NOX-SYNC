@@ -51,6 +51,7 @@ The project combines JavaFX and libGDX to balance UI layout flexibility with fas
 The multiplayer runs on an authoritative host model over two separate TCP sockets. It is tested and functional across separate devices—both over a local Wi-Fi network and across different Wi-Fi networks using Radmin VPN:
 * **Movement Stream (Port 9090):** The client polls keyboard inputs and sends a `PlayerInput` packet to the host. The host updates player coordinates, runs collision checks, and broadcasts a `WorldState` packet back at 60 Hz.
 * **Event Channel (Port 9091):** Runs a line-based protocol (`TYPE|body`) for discrete game events like terminal inputs, door states, health sync, and loot pickups. A message queue parks incoming packets if they arrive while a new level screen is still loading, preventing dropped events.
+* ** Radmin VPN:** It allows the players connect using IP address in two different wi-fi.
 * **Role Negotiation:** If both players try to select the same role at the same time, the host takes priority and the client automatically switches to the other operator, avoiding a network deadlock.
 
 ### 3. Split-Screen Viewports and Cameras
