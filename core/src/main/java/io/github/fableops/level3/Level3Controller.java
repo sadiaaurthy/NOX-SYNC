@@ -902,8 +902,12 @@ public class Level3Controller {
         if (warden.getState() == WardenState.DUAL_AUTHORIZATION || warden.getState().isStoodDown()) return;
 
         // The existing WARDEN_TURN phase remains active, but its display timer does not advance
-        // while the targeted player is choosing a response or while the telegraphed hit is pending.
-        if (reactionOpen || pendingDroneDamageTimer > 0f || turretCombatUnit >= 0) return;
+        // while the targeted player is choosing a drone response or the telegraphed hit is pending.
+        // Turrets never hold the turn: they are real-time proximity combat (updateTurretAI), so an
+        // unanswered alert or a shot in flight must not stall resolvePlayerTurn. With one waiting on
+        // the arena entrance this used to leave a confirmed Disable Drone unresolved indefinitely.
+        if ((reactionOpen && reactionAttackType == EnemyAttackType.DRONE)
+            || pendingDroneDamageTimer > 0f) return;
 
         switch (turnManager.getPhase()) {
             case PLAYER_TURN:

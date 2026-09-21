@@ -119,6 +119,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     // not to queue a turn action. If that reaction ends underneath it, the menu closes itself.
     private boolean menuIsReaction;
     private boolean selectedForReaction;
+    // The prepared TNT already answered the turret alert that is open right now
+    private boolean preparedTntAnswered;
     private float recoverBoltTimer;
     private float recoverFromX;
     private float recoverFromY;
@@ -943,6 +945,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
 
         TurnPanel.InventoryCategory category =
             TurnPanel.InventoryCategory.values()[selectedItemCategory];
+        answerTurretAlertWithPreparedTnt(category);
         boolean activate = category == TurnPanel.InventoryCategory.SIDEARM
             ? Gdx.input.isKeyJustPressed(Input.Keys.X)
             : category == TurnPanel.InventoryCategory.SHIELD
@@ -978,6 +981,26 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         playReadyItemAnimation(side, category);
         clearSelectedItem();
         confirmAction(side, action, slot);
+    }
+
+    // A prepared TNT charge means the operator is ready, the same as choosing TNT from the reaction
+    // menu: it answers a turret alert on them, so the turret carries on (aim, fire, damage) instead
+    // of waiting for a response this state never sent. The charge stays in the pack until Y throws
+    // it, and the operator moves freely meanwhile. Only the alert's own target answers it.
+    private void answerTurretAlertWithPreparedTnt(TurnPanel.InventoryCategory category) {
+        boolean answers = category == TurnPanel.InventoryCategory.TNT
+            && !selectedForReaction && reactionOpen()
+            && reactionAttackType() == Level3Controller.EnemyAttackType.TURRET
+            && selectedItemSide == reactionTargetSide() && localCanRespondToReaction();
+        if (!answers) {
+            preparedTntAnswered = false;
+            return;
+        }
+        // A client only hears the alert close on the host's next message; send the answer once
+        if (preparedTntAnswered) return;
+        preparedTntAnswered = true;
+        Gdx.app.log("Level3TntTrace", "prepared TNT answers turret alert side=" + selectedItemSide);
+        confirmReaction(ReactionType.TNT);
     }
 
     private void playReadyItemAnimation(int side, TurnPanel.InventoryCategory category) {
@@ -1191,6 +1214,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         selectedItemCategory = -1;
         selectedItemQuantity = 0;
         selectedItem = null;
+        preparedTntAnswered = false;
         lastPromptLogSignature = "";
     }
 
