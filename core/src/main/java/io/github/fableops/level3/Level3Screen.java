@@ -27,6 +27,7 @@ import io.github.fableops.level2.network.GunStateMessage;
 import io.github.fableops.level3.network.Level3ActionMessage;
 import io.github.fableops.level3.network.Level3EndingMessage;
 import io.github.fableops.level3.network.Level3EnemyStateMessage;
+import io.github.fableops.level3.network.Level3TntMessage;
 import io.github.fableops.level3.network.Level3TurnStateMessage;
 import io.github.fableops.network.GameClient;
 import io.github.fableops.network.GameServer;
@@ -105,6 +106,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     private final SecurityTurretController turretVisual;
     private final TurnPanel turnPanel;
     private final EquipmentSelectionPanel equipmentPanel;
+    private final TntExplosion tntExplosion = new TntExplosion();
     private final ReactionPanel reactionPanelP1;
     private final ReactionPanel reactionPanelP2;
     private final StoryBanner storyBanner;
@@ -287,6 +289,11 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             case "LEVEL3_ENDING":
                 beginEnding();
                 break;
+            case "LEVEL3_TNT": {
+                Level3TntMessage blast = Level3TntMessage.deserialize(body);
+                tntExplosion.spawn(blast.getX(), blast.getY());
+                break;
+            }
             case "LEVEL_RESTART":
                 restartLocalState();
                 break;
@@ -339,7 +346,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         if (state.isWardenDamaged()) wardenVisual.playDamagedFlash();
         if (state.isDroneAttacked()) {
             if (state.getReactionUnitIndex() >= 0) {
-                droneVisual.playAttackFlash(state.getReactionUnitIndex());
+                int unit = state.getReactionUnitIndex();
+                droneVisual.playAttackFlash(unit, nearestPlayerX(droneVisual, unit));
             } else {
                 droneVisual.playAttackFlash();
             }
@@ -411,6 +419,13 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         else inventories.forPlayer(side).remove(slot);
     }
 
+    // X of whichever operator is closer to this drone, so its attack beam leaves the right side
+    private float nearestPlayerX(DefenseDroneController drones, int unit) {
+        float d1 = drones.distanceSquaredToUnit(unit, player1.centreX(), player1.centreY());
+        float d2 = drones.distanceSquaredToUnit(unit, player2.centreX(), player2.centreY());
+        return d1 <= d2 ? player1.centreX() : player2.centreX();
+    }
+
     private void syncDrones(int count) {
         droneVisual.setActiveCount(count);
     }
@@ -442,6 +457,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             combatLatched = false;
         }
         recoverBoltTimer = Math.max(0f, recoverBoltTimer - delta);
+        tntExplosion.update(delta);
 
         boolean inputBlocked = missionFailed || bossStarted || storyBanner.isOpen() || logPopup.isOpen();
         inventories.handleInput(isHost || isDebug, !isHost || isDebug, inputBlocked, player1, player2);
@@ -470,6 +486,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             if (inputState == InputState.NORMAL_GAMEPLAY
                 && !overlayWasOpen && !storyBanner.isOpen() && !logPopup.isOpen()) {
                 handleTurnMenuRequest();
+                handleTntRequest();
                 if (inputState == InputState.NORMAL_GAMEPLAY && reactionOpen()) handleReactionInput();
             } else if (inputState == InputState.TURN_MENU_OPEN
                 && !overlayWasOpen && !storyBanner.isOpen() && !logPopup.isOpen()) {
@@ -484,6 +501,10 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             if (controller != null) {
                 controller.setTurretAiPaused(storyBanner.isOpen() || logPopup.isOpen());
                 controller.update(delta);
+                for (float[] blast = controller.pollTntBlast(); blast != null;
+                     blast = controller.pollTntBlast()) {
+                    tntExplosion.spawn(blast[0], blast[1]);
+                }
                 syncInputState(0f);
                 consumeControllerBeat();
                 if (wardenState().isStoodDown()) storyBanner.close();
@@ -674,6 +695,54 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         else openTurnMenu(firstMenuSide(), false, "turn menu opened");
     }
 
+    // Y throws a carried TNT charge straight from free gameplay. It is the same turn action as
+    // Inventory > TNT > Y, just without the menu. During a turret alert the throw also answers it:
+    // the operator is prepared first (which is what releases the turret), then the charge goes.
+    private void handleTntRequest() {
+        if (!Gdx.input.isKeyJustPressed(Input.Keys.Y)) return;
+        int side = tntThrowerSide();
+        if (side == 0) return;
+        int slot = Level3Controller.firstCompatibleSlot(inventories, side, PlayerActionType.USE_TNT);
+        if (slot < 0) return;
+        Gdx.app.log("InputTrace", "key=Y actionTriggered=true side=" + side);
+        if (reactionOpen()) confirmReaction(ReactionType.TNT);
+        confirmAction(side, PlayerActionType.USE_TNT, slot);
+    }
+
+    // The HUD line. It is an instruction like "PRESS T TO OPEN TURN MENU", not an interaction prompt:
+    // it is up whenever an active operator carries TNT, and nothing about the enemies (distance to a
+    // turret, a turret or drone being alive, an alert being open, whose phase it is) can hide it.
+    private boolean tntPromptVisible() {
+        if (!bossStarted || missionFailed || endingStarted) return false;
+        return (player1.health > 0f && Level3Controller.hasTnt(inventories, 1))
+            || (player2.health > 0f && Level3Controller.hasTnt(inventories, 2));
+    }
+
+    // The operator a Y press would throw for, or 0 when Y has nothing to do right now: the turn must
+    // be open to that operator (or a turret alert must be waiting on them), they must carry TNT, and
+    // there must be a turret left to hit. This is only the key; the HUD line does not depend on it.
+    private int tntThrowerSide() {
+        if (!bossStarted || missionFailed || endingStarted
+            || inputState != InputState.NORMAL_GAMEPLAY
+            || storyBanner.isOpen() || logPopup.isOpen()
+            || turretVisual.getActiveCount() == 0) return 0;
+        if (reactionOpen()) {
+            if (reactionAttackType() != Level3Controller.EnemyAttackType.TURRET
+                || !localCanRespondToReaction()) return 0;
+            int side = reactionTargetSide();
+            return Level3Controller.hasTnt(inventories, side) ? side : 0;
+        }
+        if (phase() != TurnManager.Phase.PLAYER_TURN) return 0;
+        if (!soloControl()) {
+            int side = isHost ? 1 : 2;
+            return !confirmed(side) && Level3Controller.hasTnt(inventories, side) ? side : 0;
+        }
+        for (int side = 1; side <= 2; side++) {
+            if (!confirmed(side) && Level3Controller.hasTnt(inventories, side)) return side;
+        }
+        return 0;
+    }
+
     // Single source of truth for "T would open the Turn Menu right now". It gates the T key and the
     // cyan reminder alike, so the reminder is never on screen when T would do nothing.
     private boolean turnMenuAvailable() {
@@ -785,17 +854,14 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         boolean[] available = reactionAvailability();
         return available[ReactionType.SIDEARM.ordinal()]
             || available[ReactionType.SHIELD.ordinal()]
-            || available[ReactionType.MEDKIT.ordinal()];
+            || available[ReactionType.MEDKIT.ordinal()]
+            || available[ReactionType.TNT.ordinal()];
     }
 
     // ENTER-only fallback for a reaction with no usable equipment: take the hit.
     private void handleReactionInput() {
         if (!reactionOpen() || !localCanRespondToReaction()) return;
-        boolean[] available = reactionAvailability();
-        if (!available[ReactionType.SIDEARM.ordinal()]
-            && !available[ReactionType.SHIELD.ordinal()]
-            && !available[ReactionType.MEDKIT.ordinal()]
-            && Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
+        if (!localReactionHasEquipment() && Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
             traceMenuInput("ENTER");
             confirmReaction(ReactionType.NONE);
         }
@@ -820,6 +886,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         if (category == TurnPanel.InventoryCategory.SIDEARM.ordinal()) return ReactionType.SIDEARM;
         if (category == TurnPanel.InventoryCategory.SHIELD.ordinal()) return ReactionType.SHIELD;
         if (category == TurnPanel.InventoryCategory.MEDKIT.ordinal()) return ReactionType.MEDKIT;
+        if (category == TurnPanel.InventoryCategory.TNT.ordinal()) return ReactionType.TNT;
         return null;
     }
 
@@ -838,7 +905,19 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         }
         if (!Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) return;
 
-        if (selectedItemQuantity > 0) {
+        boolean tnt = selectedItemCategory == TurnPanel.InventoryCategory.TNT.ordinal();
+        // Against a drone TNT is no answer, so it counts as an unusable choice and takes the hit
+        boolean tntUnusableHere = tnt && selectedForReaction
+            && reactionAttackType() != Level3Controller.EnemyAttackType.TURRET;
+        if (selectedItemQuantity > 0 && !tntUnusableHere) {
+            if (tnt && selectedForReaction) {
+                // TNT selected during a turret alert: the operator is now prepared, which releases
+                // the turret (nothing waits on this menu). The charge stays until Y throws it, so
+                // from here the ready state behaves exactly like TNT chosen on a normal turn.
+                Gdx.app.log("Level3TntTrace", "TNT prepared against turret alert side=" + selectedItemSide);
+                confirmReaction(ReactionType.TNT);
+                selectedForReaction = false;
+            }
             setInputState(InputState.ITEM_READY, "inventory preview confirmed");
             return;
         }
@@ -869,7 +948,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             : category == TurnPanel.InventoryCategory.SHIELD
                 ? Gdx.input.isKeyJustPressed(Input.Keys.H)
                 : category == TurnPanel.InventoryCategory.TNT
-                    ? Gdx.input.isKeyJustPressed(Input.Keys.B)
+                    ? Gdx.input.isKeyJustPressed(Input.Keys.Y)
                     : Gdx.input.isKeyJustPressed(Input.Keys.M);
         if (!activate) return;
         Gdx.app.log("InputTrace", "key=" + activationKey(category) + " actionTriggered=true");
@@ -884,7 +963,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         }
         int slot = firstPersonalCompatibleSlot(side, actionForCategory(side, category));
         if (slot < 0) return;
-        if (reactionOpen()) {
+        if (reactionOpen() && category != TurnPanel.InventoryCategory.TNT) {
             // Only the targeted player's activation answers the alert.
             if (side != reactionTargetSide()) return;
             // TNT is a turn action, not a defensive response, so it has no reaction mapping
@@ -957,6 +1036,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                         : PlayerActionType.LISTENER_SHIELD_DEFENSE);
             case MEDKIT:
                 return firstPersonalCompatibleSlot(side, PlayerActionType.USE_MEDKIT);
+            case TNT:
+                return firstPersonalCompatibleSlot(side, PlayerActionType.USE_TNT);
             default:
                 return -1;
         }
@@ -973,6 +1054,10 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             quantities[TurnPanel.InventoryCategory.SHIELD.ordinal()] > 0;
         available[ReactionType.MEDKIT.ordinal()] =
             quantities[TurnPanel.InventoryCategory.MEDKIT.ordinal()] > 0;
+        // TNT can only answer a turret; against a drone it is not an option
+        available[ReactionType.TNT.ordinal()] =
+            reactionAttackType() == Level3Controller.EnemyAttackType.TURRET
+            && quantities[TurnPanel.InventoryCategory.TNT.ordinal()] > 0;
         return available;
     }
 
@@ -1056,9 +1141,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         return side == 1 ? p1InventoryFocus : p2InventoryFocus;
     }
 
-    // Only a reaction has a second column to move to
+    // I moves between the ACTIONS section and the INVENTORY section of every Turn Menu
     private void toggleInventoryFocus(int side) {
-        if (!menuIsReaction) return;
         if (side == 1) p1InventoryFocus = !p1InventoryFocus;
         else p2InventoryFocus = !p2InventoryFocus;
         if (inventoryFocused(side)) logInventorySelection(side);
@@ -1122,8 +1206,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         if (Level3Controller.requiresEquipment(action)) {
             int firstSlot = Level3Controller.firstCompatibleSlot(inventories, side, action);
             if (firstSlot < 0) return;
-            // With a single candidate there is nothing to choose between, so the picker would only
-            // add a second confirm the player has no reason to expect. Commit straight away
+            // With one kind of item there is nothing to choose between (three Shields are one
+            // choice), so the picker would only add a second confirm. Commit straight away
             if (Level3Controller.compatibleSlotCount(inventories, side, action) <= 1) {
                 Gdx.app.log("Level3TurnMenuTrace", action.label()
                     + " has one candidate (slot " + firstSlot + "); skipping the equipment picker");
@@ -1165,8 +1249,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         int slotCount = Inventory.CAPACITY + 1;
         for (int i = 0; i < slotCount; i++) {
             slot = (slot + direction + slotCount) % slotCount;
-            if (Level3Controller.itemSupportsAction(equipmentAction,
-                Level3Controller.itemAt(inventories, equipmentSide, slot))) return slot;
+            if (Level3Controller.isKindRepresentative(inventories, equipmentSide, equipmentAction,
+                slot)) return slot;
         }
         return equipmentSelectedSlot;
     }
@@ -1486,6 +1570,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         wardenVisual.draw(batch);
         droneVisual.draw(batch);
         turretVisual.draw(batch);
+        tntExplosion.draw(batch);
         player1.draw(batch);
         player2.draw(batch);
         world.renderOverhang(batch);
@@ -1497,7 +1582,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         batch.setProjectionMatrix(uiCamera.combined);
         shape.setProjectionMatrix(uiCamera.combined);
         TurnPromptRenderer.render(hud, shape, batch, ui, TITLE, objective(), turnMenuAvailable(),
-            turnPromptHint());
+            tntPromptVisible(), turnPromptHint());
         hud.drawPlayerCards(shape, batch, ui, player1, player2, sideOneRole);
         sidearms.drawHuds(shape, batch, hud.font(), ui.width());
 
@@ -1512,7 +1597,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 actionsFor(1), actionsFor(2), activeMenuSide, soloControl(),
                 authorizationUnlocked(), authorizationLockReason(),
                 p1InventorySelected, p2InventorySelected, p1InventoryFocus, p2InventoryFocus,
-                p1Quantities, p2Quantities, reactionMenu);
+                p1Quantities, p2Quantities);
         }
         if (equipmentOpen) {
             Role role = equipmentSide == 1 ? sideOneRole : sideOneRole.other();
@@ -1535,7 +1620,11 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 TurnPanel.InventoryCategory.values()[selectedItemCategory];
             logArmedPrompt(selectedItemSide, category, selectedItemQuantity, true);
             ReactionPanel panel = selectedItemSide == 1 ? reactionPanelP1 : reactionPanelP2;
-            panel.renderActivationHeader(batch, ui, activationInstruction(category));
+            // TNT's instruction is the top-centre HUD line, which is up whenever TNT is carried;
+            // drawing it again here would print the same words over it
+            if (category != TurnPanel.InventoryCategory.TNT) {
+                panel.renderActivationHeader(batch, ui, activationInstruction(category));
+            }
         }
         // The T reminder is gone in this case (turnMenuAvailable is false), so say what does work
         if (bossStarted && reactionOpen() && localCanRespondToReaction()
@@ -1566,7 +1655,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             case SIDEARM: return "PRESS X TO FIRE SIDE ARM";
             case SHIELD: return "PRESS H TO ACTIVATE SHIELD";
             case MEDKIT: return "PRESS M TO USE MEDKIT";
-            case TNT: return "PRESS B TO DETONATE TNT";
+            case TNT: return TurnPromptRenderer.TNT_TEXT;
             default: return "";
         }
     }
@@ -1576,7 +1665,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
             case SIDEARM: return "X";
             case SHIELD: return "H";
             case MEDKIT: return "M";
-            case TNT: return "B";
+            case TNT: return "Y";
             default: return "UNKNOWN";
         }
     }
@@ -1694,6 +1783,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         enemySprites.dispose();
         coreTexture.dispose();
         hud.dispose();
+        tntExplosion.dispose();
         if (controller != null) controller.dispose();
         else {
             wardenVisual.dispose();

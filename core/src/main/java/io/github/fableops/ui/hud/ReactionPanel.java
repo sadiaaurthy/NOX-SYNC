@@ -66,7 +66,7 @@ public final class ReactionPanel {
         font.draw(batch, attackerName + " TARGETING " + targetName, x + PAD,
             y + PANEL_H - 48f, PANEL_W - PAD * 2f, Align.center, false);
 
-        String[] keys = {"ENTER", "X", "H", "M"};
+        String[] keys = {"ENTER", "X", "H", "M", "Y"};
         ReactionType[] types = ReactionType.values();
         for (int i = 0; i < types.length; i++) {
             float rowY = y + 49f + (types.length - 1 - i) * ROW_H;

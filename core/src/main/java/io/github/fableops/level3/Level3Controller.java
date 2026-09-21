@@ -15,6 +15,7 @@ import io.github.fableops.inventory.network.InventoryTransferMessage;
 import io.github.fableops.level2.Gun;
 import io.github.fableops.level2.Sidearms;
 import io.github.fableops.level3.network.Level3ActionMessage;
+import io.github.fableops.level3.network.Level3TntMessage;
 import io.github.fableops.level3.network.Level3TurnStateMessage;
 import io.github.fableops.network.session.HostSession;
 import io.github.fableops.network.session.MessageListener;
@@ -52,9 +53,11 @@ public class Level3Controller {
     private static final float DRONE_DAMAGE = 9f;
     private static final float CONTAINMENT_WARNING_DAMAGE = 6f;
     private static final float RANGE_TRACE_INTERVAL = 2f;
-    // Sidearm damage against a turret (MAX_HEALTH 30), so three shots finish one - two with the
-    // ammo cache, which is what that pickup buys. TNT is the one-shot alternative
-    private static final float TURRET_SIDEARM_DAMAGE = 10f;
+    // One Side Arm shot destroys a Security Turret (MAX_HEALTH 30). Kept well above that on purpose so
+    // a later change to turret HP does not quietly turn this back into a multi-shot fight. It only
+    // scales what the player deals: turret HP, fire rate and AI are untouched, and the drone and
+    // every other weapon value are unchanged
+    private static final float TURRET_SIDEARM_DAMAGE = 50f;
     // The ammo cache raises turn damage from 30 to 45; the same 1.5x carries to turret fire
     private static final float AMMO_CACHE_MULTIPLIER = 1.5f;
     // One charge takes down one turret. Kept well above turret MAX_HEALTH on purpose, so retuning
@@ -62,6 +65,13 @@ public class Level3Controller {
     private static final float TNT_DAMAGE = 999f;
     // Disable Drone with no sidearm to hand: the operator still pulls the kill switch by hand
     private static final float BARE_HANDED_DRONE_DAMAGE = 30f;
+    // A drone only attacks an operator inside DefenseDroneController.ATTACK_RANGE, and only chips at
+    // them: a small hit on a slow cooldown, so standing among the drones drains health steadily
+    // (about 3 HP/s with all four on you) instead of killing outright. Far away a drone stays idle -
+    // no animation, no damage. DRONE_ATTACK_STAGGER spreads the first swings so they do not sync up
+    private static final float DRONE_PROXIMITY_DAMAGE = 2f;
+    private static final float DRONE_ATTACK_COOLDOWN = 2.6f;
+    private static final float DRONE_ATTACK_STAGGER = 0.6f;
 
     private final HostSession hostSession;
     private final PlayerInventories inventories;
@@ -121,6 +131,17 @@ public class Level3Controller {
     private boolean restorationStarted;
     private boolean restorationCompleted;
 
+    // Real-time drone attacks, one slot per drone unit: a swing in progress lands when its timer runs
+    // out, and each drone rests between swings. Separate from the Warden-turn reaction attack.
+    private final float[] droneCooldown = new float[DefenseDroneController.UNIT_COUNT];
+    private final float[] droneImpactTimer = new float[DefenseDroneController.UNIT_COUNT];
+    private final int[] droneImpactSide = new int[DefenseDroneController.UNIT_COUNT];
+    private int droneEventUnit = -1;
+    // TNT is thrown the moment the operator commits to it; the turn round then reports it here.
+    // Index = side - 1. Blasts wait here until the screen has started drawing them.
+    private final String[] tntLine = new String[2];
+    private final List<float[]> pendingBlasts = new ArrayList<>();
+
     private int bannerSeq;
     private int pendingBannerId = -1;
     private String wardenLine = "";
@@ -154,6 +175,8 @@ public class Level3Controller {
         drone = new DefenseDroneController(droneAnchor[0], droneAnchor[1]);
         turret = new SecurityTurretController(world.getTurretGroundPoints());
         Arrays.fill(tracedTurretState, SecurityTurretController.AnimationState.IDLE_ROTATING);
+        Arrays.fill(droneImpactTimer, -1f);
+        staggerDroneCooldowns();
     }
 
     public WardenController getWarden() { return warden; }
@@ -171,6 +194,11 @@ public class Level3Controller {
     public int getReactionTargetSide() { return reactionTargetSide; }
 
     public void setTurretAiPaused(boolean paused) { turretAiPaused = paused; }
+
+    // Screen side: the next TNT blast still to be drawn on the host (x, y), or null.
+    public float[] pollTntBlast() {
+        return pendingBlasts.isEmpty() ? null : pendingBlasts.remove(0);
+    }
 
     public boolean isPlayerCombatReady(int side) {
         return (side == 1 || side == 2) && playerCombatReady[side - 1];
@@ -213,6 +241,69 @@ public class Level3Controller {
         }
         if (turretCombatUnit >= 0 && !turret.isInCombat(turretCombatUnit)) turretCombatUnit = -1;
         allocateTurretAttack(hostile);
+    }
+
+    // A drone attacks only an operator inside DefenseDroneController.ATTACK_RANGE. It plays its attack
+    // row, and the hit lands at the animation's impact frame; then it rests before swinging again.
+    // Out of range it stays idle, so nothing animates and nothing hurts.
+    private void updateDroneAI(float delta) {
+        boolean hostile = !warden.getState().isStoodDown()
+            && warden.getState() != WardenState.DUAL_AUTHORIZATION;
+        for (int i = 0; i < DefenseDroneController.UNIT_COUNT; i++) {
+            droneCooldown[i] = Math.max(0f, droneCooldown[i] - delta);
+            if (droneImpactTimer[i] > 0f) {
+                droneImpactTimer[i] -= delta;
+                if (droneImpactTimer[i] <= 0f) landDroneStrike(i, hostile);
+                continue;
+            }
+            if (!hostile || turretAiPaused || reactionOpen || pendingDroneDamageTimer > 0f
+                || droneCooldown[i] > 0f || !drone.isUnitActive(i) || drone.isUnitAttacking(i)) continue;
+            int side = droneTargetInRange(i);
+            if (side == 0) continue;
+            Player target = side == 1 ? player1 : player2;
+            drone.playAttackFlash(i, target.centreX());
+            droneImpactTimer[i] = DefenseDroneController.ATTACK_IMPACT_TIME;
+            droneImpactSide[i] = side;
+            droneCooldown[i] = DRONE_ATTACK_COOLDOWN;
+            droneAttacked = true;
+            droneEventUnit = i;
+            Gdx.app.log("DefenseDroneTrace", "proximity attack started unit=" + i + " targetSide=" + side);
+            broadcast();
+        }
+    }
+
+    private void staggerDroneCooldowns() {
+        for (int i = 0; i < droneCooldown.length; i++) droneCooldown[i] = i * DRONE_ATTACK_STAGGER;
+    }
+
+    private void landDroneStrike(int unit, boolean hostile) {
+        droneImpactTimer[unit] = -1f;
+        int side = droneImpactSide[unit];
+        Player target = side == 1 ? player1 : player2;
+        // The swing can miss: the drone was destroyed mid-swing, or the operator backed out of reach
+        float reach = DefenseDroneController.ATTACK_RANGE * 1.25f;
+        if (!hostile || !drone.isUnitActive(unit) || target.health <= 0f
+            || drone.distanceSquaredToUnit(unit, target.centreX(), target.centreY()) > reach * reach) {
+            return;
+        }
+        applyWardenDamage(target, DRONE_PROXIMITY_DAMAGE);
+        damageAppliedTargetSide = side;
+        Gdx.app.log("DefenseDroneTrace", "proximity damage unit=" + unit + " targetSide=" + side
+            + " health=" + target.health);
+        broadcast();
+    }
+
+    // The nearer living operator inside this drone's attack range (1 or 2), or 0 when both are out.
+    private int droneTargetInRange(int unit) {
+        float limit = DefenseDroneController.ATTACK_RANGE * DefenseDroneController.ATTACK_RANGE;
+        float d1 = player1.health > 0f
+            ? drone.distanceSquaredToUnit(unit, player1.centreX(), player1.centreY())
+            : Float.POSITIVE_INFINITY;
+        float d2 = player2.health > 0f
+            ? drone.distanceSquaredToUnit(unit, player2.centreX(), player2.centreY())
+            : Float.POSITIVE_INFINITY;
+        if (d1 > limit && d2 > limit) return 0;
+        return d1 <= d2 ? 1 : 2;
     }
 
     // Periodic proof that far-away players are not detected: nearest turret, distance, range.
@@ -315,7 +406,8 @@ public class Level3Controller {
             InventoryItem item = inventory.get(slot);
             if ((sidearms != null && sidearms.forSide(side).hasAmmo() && itemSupportsAction(weapon, item))
                 || itemSupportsAction(shield, item)
-                || itemSupportsAction(PlayerActionType.USE_MEDKIT, item)) return true;
+                || itemSupportsAction(PlayerActionType.USE_MEDKIT, item)
+                || itemSupportsAction(PlayerActionType.USE_TNT, item)) return true;
         }
         return false;
     }
@@ -441,15 +533,41 @@ public class Level3Controller {
         }
     }
 
-    // How many carried items could satisfy this action. One or fewer means there is nothing to
-    // choose between, so the caller can skip the equipment picker entirely
+    // Copies of one item are interchangeable, so a picker lists each kind once and shows how many
+    // are carried, instead of one identical row per copy. A slot is its kind's representative when
+    // no earlier compatible slot holds an item of the same name.
+    public static boolean isKindRepresentative(PlayerInventories inventories, int side,
+                                               PlayerActionType action, int slot) {
+        InventoryItem item = itemAt(inventories, side, slot);
+        if (!itemSupportsAction(action, item)) return false;
+        for (int i = 0; i < slot; i++) {
+            InventoryItem earlier = itemAt(inventories, side, i);
+            if (itemSupportsAction(action, earlier)
+                && earlier.getName().equalsIgnoreCase(item.getName())) return false;
+        }
+        return true;
+    }
+
+    // How many carried copies of this item could satisfy the action.
+    public static int kindCount(PlayerInventories inventories, int side, PlayerActionType action,
+                                InventoryItem item) {
+        int count = 0;
+        for (int i = 0; i <= Inventory.CAPACITY; i++) {
+            InventoryItem carried = itemAt(inventories, side, i);
+            if (itemSupportsAction(action, carried)
+                && carried.getName().equalsIgnoreCase(item.getName())) count++;
+        }
+        return count;
+    }
+
+    // How many different kinds of carried item could satisfy this action. One or fewer means there
+    // is nothing to choose between, so the caller can skip the equipment picker entirely.
     public static int compatibleSlotCount(PlayerInventories inventories, int side,
                                           PlayerActionType action) {
         int count = 0;
-        for (int i = 0; i < Inventory.CAPACITY; i++) {
-            if (itemSupportsAction(action, inventories.forPlayer(side).get(i))) count++;
+        for (int i = 0; i <= Inventory.CAPACITY; i++) {
+            if (isKindRepresentative(inventories, side, action, i)) count++;
         }
-        if (itemSupportsAction(action, inventories.sharedItem())) count++;
         return count;
     }
 
@@ -581,6 +699,7 @@ public class Level3Controller {
             turnManager.confirmP2(action);
         }
         else return;
+        if (action == PlayerActionType.USE_TNT) throwTntNow(side, inventorySlot);
         // The memory is recovered the moment the Listener commits to it, not when the partner's turn
         // finally resolves, so the Turn Menu can offer Restore Authorization straight away. The turn
         // effects (progress, banner) still apply once, at resolution.
@@ -611,6 +730,12 @@ public class Level3Controller {
             case MEDKIT:
                 if (!itemSupportsAction(PlayerActionType.USE_MEDKIT,
                     itemAt(inventories, side, inventorySlot))) return;
+                break;
+            case TNT:
+                // TNT only means something against a turret, and is prepared here, not spent
+                if (reactionAttackType != EnemyAttackType.TURRET
+                    || !itemSupportsAction(PlayerActionType.USE_TNT,
+                        itemAt(inventories, side, inventorySlot))) return;
                 break;
             case NONE:
                 // A turret is released only by preparing (X/H/M). With no usable equipment there
@@ -701,6 +826,10 @@ public class Level3Controller {
             turretShieldBlock[side - 1] = true;
         } else if (reaction == ReactionType.MEDKIT) {
             setOperatorLine(side, useMedkit(target, inventorySlot));
+        } else if (reaction == ReactionType.TNT) {
+            // Prepared, not thrown: the charge stays in the pack until Y. Like every other
+            // preparation this lets the alerted turret take its turn, so the enemy phase carries on
+            setOperatorLine(side, callSignOf(target) + " arms a TNT charge against the turret.");
         } else {
             setOperatorLine(side, callSignOf(target) + " has nothing to deploy against the turret.");
         }
@@ -738,6 +867,7 @@ public class Level3Controller {
             broadcast();
         }
         updateTurretAI(delta);
+        updateDroneAI(delta);
         updatePendingDroneAttack(delta);
 
         if (standDownTimer > 0f) {
@@ -986,8 +1116,12 @@ public class Level3Controller {
                 return name + " " + action.flavorVerb() + ".";
             case USE_MEDKIT:
                 return useMedkit(self, inventorySlot);
-            case USE_TNT:
-                return useTnt(self, inventorySlot);
+            case USE_TNT: {
+                int side = self == player1 ? 1 : 2;
+                String thrown = tntLine[side - 1];
+                tntLine[side - 1] = null;
+                return thrown != null ? thrown : useTnt(self, inventorySlot);
+            }
             case USE_PLATING:
                 return usePlating(self, inventorySlot);
             case USE_ITEM:
@@ -1112,14 +1246,44 @@ public class Level3Controller {
             return name + " finds no turret left to bring down.";
         }
 
-        damageTurret(TNT_DAMAGE);
+        // The charge lands on the turret nearest the thrower and takes down that one only
+        int target = nearestActiveTurret(self.centreX(), self.centreY());
+        int before = turret.getActiveCount();
+        turretDamagedIndex = turret.damage(target, TNT_DAMAGE);
+        turretDestroyed = turretDamagedIndex >= 0 && turret.getActiveCount() < before;
         removeItemAt(side, slot);
         recordConsumedSlot(side, slot);
         addProgress(8f, 8f);
+
+        float blastX = turret.unitX(target);
+        float blastY = turret.unitY(target);
+        pendingBlasts.add(new float[]{blastX, blastY});
+        if (hostSession != null) hostSession.send(new Level3TntMessage(blastX, blastY));
         Gdx.app.log("SecurityTurretTrace", "TNT destroyed turretID=" + turretDamagedIndex
             + " remaining=" + turret.getActiveCount());
         return name + " " + PlayerActionType.USE_TNT.flavorVerb()
             + "; the housing blows open and the turret goes dark.";
+    }
+
+    private int nearestActiveTurret(float x, float y) {
+        int nearest = -1;
+        float best = Float.POSITIVE_INFINITY;
+        for (int i = 0; i < SecurityTurretController.UNIT_COUNT; i++) {
+            float d = turret.distanceSquaredToUnit(i, x, y);
+            if (d < best) {
+                best = d;
+                nearest = i;
+            }
+        }
+        return nearest;
+    }
+
+    // The charge leaves the operator's hands the moment they commit to it, so the throw and the blast
+    // play right away instead of waiting on the partner's confirmation. The round still reports it.
+    // With no turret left nothing is thrown and nothing is spent; the round reports that instead.
+    private void throwTntNow(int side, int slot) {
+        if (turret.getActiveCount() == 0) return;
+        tntLine[side - 1] = useTnt(side == 1 ? player1 : player2, slot);
     }
 
     private String useShield(Player self) {
@@ -1244,6 +1408,12 @@ public class Level3Controller {
         if (unit < 0) return;
         Player target = nearestValidPlayer(drone.unitX(unit), drone.unitY(unit));
         if (target == null) return;
+        // Drones only attack what they can reach; with every operator far away they hold their orbit
+        float limit = DefenseDroneController.ATTACK_RANGE * DefenseDroneController.ATTACK_RANGE;
+        if (drone.distanceSquaredToUnit(unit, target.centreX(), target.centreY()) > limit) {
+            wardenLine = "The defense drones hold their orbit; no operator is within reach.";
+            return;
+        }
         reactionOpen = true;
         reactionAttackType = EnemyAttackType.DRONE;
         reactionTargetSide = target == player1 ? 1 : 2;
@@ -1274,7 +1444,7 @@ public class Level3Controller {
     private void startReactionAttack() {
         Player target = reactionTargetSide == 1 ? player1 : player2;
         if (reactionAttackType == EnemyAttackType.DRONE && drone.isUnitActive(reactionUnitIndex)) {
-            drone.playAttackFlash(reactionUnitIndex);
+            drone.playAttackFlash(reactionUnitIndex, target.centreX());
             warden.playAttackFlash();
             droneAttacked = true;
             wardenAttacked = true;
@@ -1382,7 +1552,8 @@ public class Level3Controller {
                 turretDestroyed, turretAiming, turretEventSide, memoryRecovered,
                 reactionOpen, reactionAttackType == null ? -1 : reactionAttackType.ordinal(),
                 reactionTargetSide, reactionSelectionOrdinal, damageAppliedTargetSide,
-                turretAiming ? turretEventUnit : reactionUnitIndex,
+                turretAiming ? turretEventUnit
+                    : droneAttacked && droneEventUnit >= 0 ? droneEventUnit : reactionUnitIndex,
                 restorationStarted, restorationCompleted));
             if (sidearms != null) {
                 hostSession.send(sidearms.forSide(1).toMessage());
@@ -1392,6 +1563,7 @@ public class Level3Controller {
         wardenAttacked = false;
         wardenDamaged = false;
         droneAttacked = false;
+        droneEventUnit = -1;
         turretAiming = false;
         turretEventUnit = -1;
         turretEventSide = 0;
@@ -1437,6 +1609,11 @@ public class Level3Controller {
         turretEventUnit = -1;
         turretEventSide = 0;
         turretCombatUnit = -1;
+        staggerDroneCooldowns();
+        Arrays.fill(droneImpactTimer, -1f);
+        droneEventUnit = -1;
+        Arrays.fill(tntLine, null);
+        pendingBlasts.clear();
         playerCombatReady[0] = false;
         playerCombatReady[1] = false;
         turretShieldBlock[0] = false;

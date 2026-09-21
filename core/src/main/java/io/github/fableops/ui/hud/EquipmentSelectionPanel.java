@@ -67,7 +67,7 @@ public final class EquipmentSelectionPanel {
         int drawn = 0;
         for (int slot = 0; slot <= Inventory.CAPACITY && drawn < visibleRows; slot++) {
             InventoryItem item = Level3Controller.itemAt(inventories, side, slot);
-            if (!Level3Controller.itemSupportsAction(action, item)) continue;
+            if (!Level3Controller.isKindRepresentative(inventories, side, action, slot)) continue;
             if (position++ < firstPosition) continue;
             float rowY = y + FOOTER_H + (visibleRows - 1 - drawn) * ROW_H;
             shape.setColor(slot == selectedSlot ? SELECTED : ROW);
@@ -89,14 +89,17 @@ public final class EquipmentSelectionPanel {
         drawn = 0;
         for (int slot = 0; slot <= Inventory.CAPACITY && drawn < visibleRows; slot++) {
             InventoryItem item = Level3Controller.itemAt(inventories, side, slot);
-            if (!Level3Controller.itemSupportsAction(action, item)) continue;
+            if (!Level3Controller.isKindRepresentative(inventories, side, action, slot)) continue;
             if (position++ < firstPosition) continue;
             float rowY = y + FOOTER_H + (visibleRows - 1 - drawn) * ROW_H;
             batch.draw(item.getIcon(), x + PAD + 8f, rowY + 8f, ICON, ICON);
             font.getData().setScale(1.0f);
             font.setColor(slot == selectedSlot ? accent : TEXT);
             String source = slot == Level3Controller.SHARED_SLOT_INDEX ? " (SHARED)" : "";
-            font.draw(batch, (slot == selectedSlot ? "> " : "  ") + item.getName() + source,
+            // One row per kind of item, with how many are carried beside the name
+            int carried = Level3Controller.kindCount(inventories, side, action, item);
+            font.draw(batch, (slot == selectedSlot ? "> " : "  ") + item.getName() + source
+                    + " x" + carried,
                 x + PAD + ICON + 18f, rowY + 33f);
             font.getData().setScale(0.72f);
             font.setColor(DIM);
@@ -118,20 +121,14 @@ public final class EquipmentSelectionPanel {
 
     private static int compatibleCount(PlayerInventories inventories, int side,
                                        PlayerActionType action) {
-        int count = 0;
-        for (int slot = 0; slot <= Inventory.CAPACITY; slot++) {
-            if (Level3Controller.itemSupportsAction(action,
-                Level3Controller.itemAt(inventories, side, slot))) count++;
-        }
-        return count;
+        return Level3Controller.compatibleSlotCount(inventories, side, action);
     }
 
     private static int compatiblePosition(PlayerInventories inventories, int side,
                                           PlayerActionType action, int selectedSlot) {
         int position = 0;
         for (int slot = 0; slot <= Inventory.CAPACITY; slot++) {
-            if (!Level3Controller.itemSupportsAction(action,
-                Level3Controller.itemAt(inventories, side, slot))) continue;
+            if (!Level3Controller.isKindRepresentative(inventories, side, action, slot)) continue;
             if (slot == selectedSlot) return position;
             position++;
         }
@@ -144,12 +141,7 @@ public final class EquipmentSelectionPanel {
             || action == PlayerActionType.LISTENER_WEAPON_ATTACK) {
             return "Ammo: " + gun.getTotalRounds();
         }
-        int remaining = 0;
-        for (int slot = 0; slot <= Inventory.CAPACITY; slot++) {
-            InventoryItem carried = Level3Controller.itemAt(inventories, side, slot);
-            if (carried != null && item.getName().equalsIgnoreCase(carried.getName())) remaining++;
-        }
-        return "Remaining: " + remaining;
+        return "";
     }
 
     private static void blend(boolean on) {

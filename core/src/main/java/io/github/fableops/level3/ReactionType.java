@@ -7,7 +7,11 @@ public enum ReactionType {
     NONE("Take Hit"),
     SIDEARM("Sidearm"),
     SHIELD("Shield"),
-    MEDKIT("Medkit");
+    MEDKIT("Medkit"),
+    // Appended so the ordinals on the event channel stay stable. Answers a turret alert only: it
+    // spends nothing, it prepares the operator (which releases the turret) and the charge itself is
+    // thrown afterwards with Y, as the Use TNT turn action.
+    TNT("TNT");
 
     private final String label;
 

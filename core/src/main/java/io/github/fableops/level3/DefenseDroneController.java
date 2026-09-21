@@ -14,6 +14,8 @@ public class DefenseDroneController {
     public static final int MIN_UNITS = 3;
     public static final int UNIT_COUNT = 5;
     public static final float DRAW_SIZE = 130f;
+    // A drone only attacks an operator this close (measured from the middle of the sprite)
+    public static final float ATTACK_RANGE = 260f;
 
     private static final int COLUMNS = 8;
     private static final int ROWS = 4;
@@ -52,6 +54,8 @@ public class DefenseDroneController {
         float attackTimer;
         float damagedTimer;
         float restorationTimer;
+        // The attack row's beam points right, so a target on the left mirrors the sprite
+        boolean faceLeft;
     }
 
     private final Texture texture;
@@ -200,6 +204,25 @@ public class DefenseDroneController {
         return index;
     }
 
+    // Same attack, fired toward targetX so the beam leaves the side the target is on
+    public int playAttackFlash(int index, float targetX) {
+        if (index >= 0 && index < units.length) units[index].faceLeft = targetX < units[index].x;
+        return playAttackFlash(index);
+    }
+
+    public boolean isUnitAttacking(int index) {
+        return index >= 0 && index < units.length
+            && units[index].animationState == AnimationState.ATTACKING;
+    }
+
+    // Squared distance from the middle of an active unit, infinite for one that is not flying
+    public float distanceSquaredToUnit(int index, float targetX, float targetY) {
+        if (!isUnitActive(index)) return Float.POSITIVE_INFINITY;
+        float dx = targetX - units[index].x;
+        float dy = targetY - (units[index].y + DRAW_SIZE * 0.5f);
+        return dx * dx + dy * dy;
+    }
+
     public boolean isUnitActive(int index) {
         return index >= 0 && index < units.length && units[index].state == UnitState.ACTIVE;
     }
@@ -258,11 +281,12 @@ public class DefenseDroneController {
             unit.attackTimer = Math.max(0f, unit.attackTimer - delta);
             unit.damagedTimer = Math.max(0f, unit.damagedTimer - delta);
             unit.restorationTimer = Math.max(0f, unit.restorationTimer - delta);
+            // A living drone goes back to orbiting the Warden once an attack or a hit has played out
             if (unit.animationState == AnimationState.ATTACKING && unit.attackTimer <= 0f) {
-                unit.animationState = AnimationState.IDLE;
+                unit.animationState = AnimationState.MOVING;
             }
             if (unit.animationState == AnimationState.DAMAGED && unit.damagedTimer <= 0f) {
-                unit.animationState = AnimationState.IDLE;
+                unit.animationState = AnimationState.MOVING;
             } else if (unit.animationState == AnimationState.DESTROYING
                 && unit.damagedTimer <= 0f) {
                 unit.state = UnitState.DESTROYED;
@@ -323,7 +347,11 @@ public class DefenseDroneController {
             float lunge = unit.animationState == AnimationState.ATTACKING
                 ? (float) Math.sin((ATTACK_DURATION - unit.attackTimer) / ATTACK_DURATION * Math.PI) * ATTACK_LUNGE
                 : 0f;
-            batch.draw(frame, unit.x - drawW / 2f, unit.y - lunge, drawW, DRAW_SIZE);
+            if (unit.faceLeft && unit.animationState == AnimationState.ATTACKING) {
+                batch.draw(frame, unit.x + drawW / 2f, unit.y - lunge, -drawW, DRAW_SIZE);
+            } else {
+                batch.draw(frame, unit.x - drawW / 2f, unit.y - lunge, drawW, DRAW_SIZE);
+            }
         }
     }
 

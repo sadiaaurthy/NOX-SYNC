@@ -32,7 +32,7 @@ public class TurnPanel {
     }
 
     private static final float PANEL_W = 900f;
-    private static final float PANEL_H = 540f;
+    private static final float PANEL_H = 600f;
     private static final float TOP_Y = 840f;
     private static final float COLUMN_W = 410f;
     private static final float ROW_H = 28f;
@@ -64,7 +64,7 @@ public class TurnPanel {
                        boolean authorizationAllowed, String authorizationLockReason,
                        int p1InventorySelected, int p2InventorySelected,
                        boolean p1InventoryFocus, boolean p2InventoryFocus,
-                       int[] p1Quantities, int[] p2Quantities, boolean showInventory) {
+                       int[] p1Quantities, int[] p2Quantities) {
         float x = (ui.width() - PANEL_W) / 2f;
         float y = TOP_Y - PANEL_H;
 
@@ -98,10 +98,10 @@ public class TurnPanel {
 
         drawColumn(batch, x + 20f, y + PANEL_H - 82f, 1, p1Role, p1CallSign,
             p1Actions, p1Selected, p1Confirmed, activeMenuSide == 1,
-            p1InventorySelected, p1InventoryFocus, p1Quantities, authorizationAllowed, showInventory);
+            p1InventorySelected, p1InventoryFocus, p1Quantities, authorizationAllowed);
         drawColumn(batch, x + PANEL_W / 2f + 20f, y + PANEL_H - 82f, 2, p2Role, p2CallSign,
             p2Actions, p2Selected, p2Confirmed, activeMenuSide == 2,
-            p2InventorySelected, p2InventoryFocus, p2Quantities, authorizationAllowed, showInventory);
+            p2InventorySelected, p2InventoryFocus, p2Quantities, authorizationAllowed);
 
         if (!authorizationAllowed) {
             font.getData().setScale(0.96f);
@@ -122,7 +122,7 @@ public class TurnPanel {
                             String callSign, PlayerActionType[] actions, int actionSelected,
                             boolean confirmed, boolean active, int inventorySelected,
                             boolean inventoryFocus, int[] quantities,
-                            boolean authorizationAllowed, boolean showInventory) {
+                            boolean authorizationAllowed) {
         font.getData().setScale(1.45f);
         font.setColor(active && !confirmed ? CYAN : TEXT);
         font.draw(batch, (active && !confirmed ? "> " : "  ") + "PLAYER " + side + ": "
@@ -135,7 +135,7 @@ public class TurnPanel {
         float rowY = topY - ROW_H;
         font.getData().setScale(0.9f);
         font.setColor(DIM);
-        font.draw(batch, "ACTIONS", x, rowY);
+        font.draw(batch, "PLAYER ACTIONS", x, rowY);
         rowY -= ROW_H;
 
         font.getData().setScale(1.16f);
@@ -150,13 +150,11 @@ public class TurnPanel {
             rowY -= ROW_H;
         }
 
-        // Only a reaction shows the inventory: it can be answered with carried gear alone. A normal
-        // turn lists gear as its own action rows instead, so there is no second column to tab into
-        if (!showInventory) return;
+        // Every Turn Menu is PLAYER ACTIONS above PLAYER INVENTORY, whatever the enemies are doing
         rowY -= ROW_H * 0.45f;
         font.getData().setScale(1.0f);
         font.setColor(DIM);
-        font.draw(batch, "INVENTORY", x, rowY);
+        font.draw(batch, "PLAYER INVENTORY", x, rowY);
         rowY -= ROW_H;
 
         InventoryCategory[] categories = InventoryCategory.values();
