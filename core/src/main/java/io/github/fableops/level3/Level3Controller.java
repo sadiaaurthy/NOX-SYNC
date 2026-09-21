@@ -74,7 +74,10 @@ public class Level3Controller {
     private float standDownTimer = -1f;
     private float endingTimer = -1f;
     private boolean endingReady;
+    // recoverMemoryCompleted: set as soon as the Listener confirms Recover Memory with the defenses down.
     private boolean memoryRecovered;
+    // The turn effects of Recover Memory (progress, Warden state, banner) ran; once, at resolution.
+    private boolean memoryEffectsApplied;
     private boolean reactionOpen;
     private EnemyAttackType reactionAttackType;
     private int reactionTargetSide;
@@ -331,13 +334,23 @@ public class Level3Controller {
             + " damageApplied=" + damageApplied);
     }
 
-    public boolean isAuthorizationAllowed() {
-        return defensesCleared() && memoryRecovered;
+    // The three checks the Restore Authorization flow hangs on. Menu rows, action validation, the
+    // ENTER confirmation and the HUD hint all read these, so they can never disagree.
+    public boolean isDefensesCleared() {
+        return defensesCleared();
+    }
+
+    public boolean isRecoverMemoryCompleted() {
+        return memoryRecovered;
+    }
+
+    public boolean isAuthorizationUnlocked() {
+        return isDefensesCleared() && isRecoverMemoryCompleted();
     }
 
     public String authorizationLockReason() {
-        if (!defensesCleared()) return "Restore Authorization requires all defenses disabled";
-        if (!memoryRecovered) return "Restore Authorization requires recovered memory";
+        if (!isDefensesCleared()) return "Restore Authorization requires all defenses disabled";
+        if (!isRecoverMemoryCompleted()) return "Restore Authorization requires recovered memory";
         return "";
     }
 
@@ -494,7 +507,7 @@ public class Level3Controller {
         }
         if (action == PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT) {
             logAuthorizationValidation();
-            if (!isAuthorizationAllowed()) return;
+            if (!isAuthorizationUnlocked()) return;
         }
         if (requiresEquipment(action)) {
             InventoryItem selected = itemAt(inventories, side, inventorySlot);
@@ -513,6 +526,14 @@ public class Level3Controller {
             turnManager.confirmP2(action);
         }
         else return;
+        // The memory is recovered the moment the Listener commits to it, not when the partner's turn
+        // finally resolves, so the Turn Menu can offer Restore Authorization straight away. The turn
+        // effects (progress, banner) still apply once, at resolution.
+        if (action == PlayerActionType.LISTENER_RECOVER_LOGS && isDefensesCleared() && !memoryRecovered) {
+            memoryRecovered = true;
+            Gdx.app.log("Level3EndingTrace", "Recover Memory confirmed recoverMemoryCompleted=true"
+                + " authorizationUnlocked=" + isAuthorizationUnlocked());
+        }
         broadcast();
     }
 
@@ -755,16 +776,16 @@ public class Level3Controller {
         breakerSupported = listenerAction == PlayerActionType.LISTENER_SUPPORT_BREAKER;
         int breakerSlot = p1IsBreaker ? p1SelectedItemSlot : p2SelectedItemSlot;
         int listenerSlot = p1IsBreaker ? p2SelectedItemSlot : p1SelectedItemSlot;
-        boolean memoryWasRecovered = memoryRecovered;
+        boolean memoryWasApplied = memoryEffectsApplied;
         breakerLine = resolvePlayerAction(breakerAction, breaker, breakerSlot);
         listenerLine = resolvePlayerAction(listenerAction, listener, listenerSlot);
-        boolean memoryRecoveredThisTurn = !memoryWasRecovered && memoryRecovered;
+        boolean memoryRecoveredThisTurn = !memoryWasApplied && memoryEffectsApplied;
         if (!memoryRecoveredThisTurn) advanceStateIfNeeded();
 
         boolean authorizationRequested = listenerAction == PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT;
         if (authorizationRequested) {
             logAuthorizationValidation();
-            if (isAuthorizationAllowed()) beginRestoration("defenses cleared and memory recovered");
+            if (isAuthorizationUnlocked()) beginRestoration("defenses cleared and memory recovered");
         }
     }
 
@@ -772,7 +793,7 @@ public class Level3Controller {
         Gdx.app.log("Level3EndingTrace", "Before Restore Authorization: remaining drones="
             + drone.getActiveCount() + " remaining turrets=" + turret.getActiveCount()
             + " memoryRecovered=" + memoryRecovered
-            + " authorizationAllowed=" + isAuthorizationAllowed()
+            + " authorizationAllowed=" + isAuthorizationUnlocked()
             + " hostility=" + warden.getDirectiveConflict()
             + " state=" + warden.getState());
     }
@@ -869,8 +890,9 @@ public class Level3Controller {
                 if (!defensesCleared()) {
                     return name + " cannot recover the Warden's memory while defenses remain online.";
                 }
-                if (memoryRecovered) return name + " confirms the recovered Warden memory.";
+                if (memoryEffectsApplied) return name + " confirms the recovered Warden memory.";
                 memoryRecovered = true;
+                memoryEffectsApplied = true;
                 addProgress(6f, 7f);
                 if (warden.getState() == WardenState.DEFENSE_ACTIVE) {
                     warden.setState(WardenState.MEMORY_RECOVERY);
@@ -1259,6 +1281,7 @@ public class Level3Controller {
         endingTimer = -1f;
         endingReady = false;
         memoryRecovered = false;
+        memoryEffectsApplied = false;
         reactionOpen = false;
         reactionAttackType = null;
         reactionTargetSide = 0;

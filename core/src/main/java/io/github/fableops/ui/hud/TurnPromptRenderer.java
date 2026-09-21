@@ -12,13 +12,17 @@ import io.github.fableops.ui.UiViewport;
 public final class TurnPromptRenderer {
 
     public static final String TEXT = "PRESS T TO OPEN TURN MENU";
+    // Crimson second line under the cyan one, teaching the order: Recover Memory, then Authorization.
+    public static final String HINT_RECOVER_MEMORY = "CHOOSE RECOVER MEMORY";
+    public static final String HINT_RESTORE_AUTHORIZATION = "CHOOSE RESTORE AUTHORIZATION";
 
     private TurnPromptRenderer() {}
 
     // visible is false while the Turn Menu is open (or T cannot open it), so the reminder is gone
-    // only then and comes straight back once the menu closes.
+    // only then and comes straight back once the menu closes. hint is null when there is no
+    // guidance to give; it never draws without the cyan line above it.
     public static void render(Hud hud, ShapeRenderer shape, SpriteBatch batch, UiViewport ui,
-                              String title, String objective, boolean visible) {
-        hud.drawBanner(shape, batch, ui, title, objective, visible ? TEXT : null, -1f);
+                              String title, String objective, boolean visible, String hint) {
+        hud.drawBanner(shape, batch, ui, title, objective, visible ? TEXT : null, hint, -1f);
     }
 }

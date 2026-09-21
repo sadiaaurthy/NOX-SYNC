@@ -46,6 +46,9 @@ public final class Hud {
     private static final Color CYAN = new Color(0.35f, 0.92f, 1f, 1f);
     private static final Color LOW = new Color(1f, 0.30f, 0.34f, 1f);
     private static final Color ALERT = new Color(1f, 0.62f, 0.22f, 1f);
+    private static final Color CRIMSON = new Color(0.86f, 0.08f, 0.16f, 1f);
+    private static final Color CRIMSON_GLOW = new Color(1f, 0.10f, 0.20f, 0.35f);
+    private static final float[] GLOW_OFFSETS = {-2f, 0f, 2f, 0f, 0f, -2f, 0f, 2f, -3f, -3f, 3f, 3f};
 
     // Below this the bar turns red
     private static final float LOW_HEALTH = 0.3f;
@@ -130,6 +133,13 @@ public final class Hud {
     // Centred at the top, between the two cards. meter < 0 hides the alert bar
     public void drawBanner(ShapeRenderer shape, SpriteBatch batch, UiViewport ui,
                            String title, String objective, String prompt, float meter) {
+        drawBanner(shape, batch, ui, title, objective, prompt, null, meter);
+    }
+
+    // hint is a second, crimson prompt line directly under the cyan one. It only shows with a prompt.
+    public void drawBanner(ShapeRenderer shape, SpriteBatch batch, UiViewport ui,
+                           String title, String objective, String prompt, String hint, float meter) {
+        if (prompt == null) hint = null;
         // Never wide enough to reach a card, however long the objective gets
         float maxW = ui.width() - 2f * (MARGIN + CARD_W + 20f);
         float width = Math.max(BANNER_MIN_W, measure(title, TITLE_SCALE) + 2f * BANNER_PAD);
@@ -140,6 +150,8 @@ public final class Hud {
         float titleH = measureWrapped(title, TITLE_SCALE, textW);
         float objectiveH = measureWrapped(objective, BODY_SCALE, textW);
         float promptH = (prompt == null) ? 0f : measureWrapped(prompt, BODY_SCALE, textW) + 10f;
+        float hintH = (hint == null) ? 0f : measureWrapped(hint, BODY_SCALE, textW) + 10f;
+        promptH += hintH;
         float meterH = (meter >= 0f) ? METER_H + 12f : 0f;
         float height = 2f * BANNER_PAD + titleH + 8f + objectiveH + promptH + meterH;
 
@@ -176,6 +188,18 @@ public final class Hud {
             textY -= objectiveH + 10f;
             font.setColor(CYAN);
             font.draw(batch, prompt, textX, textY, textW, Align.center, true);
+            if (hint != null) {
+                textY -= measureWrapped(prompt, BODY_SCALE, textW) + 10f;
+                // Soft glow: the same line offset a pixel or two around the crisp text
+                font.getData().setScale(BODY_SCALE);
+                font.setColor(CRIMSON_GLOW);
+                for (int i = 0; i < GLOW_OFFSETS.length; i += 2) {
+                    font.draw(batch, hint, textX + GLOW_OFFSETS[i], textY + GLOW_OFFSETS[i + 1],
+                        textW, Align.center, true);
+                }
+                font.setColor(CRIMSON);
+                font.draw(batch, hint, textX, textY, textW, Align.center, true);
+            }
         }
         batch.end();
     }

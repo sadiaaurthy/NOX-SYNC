@@ -676,10 +676,13 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     // Player 1 unless this keyboard controls both operators and Player 1 has already confirmed.
     private int firstMenuSide() {
         if (!soloControl()) return isHost ? 1 : 2;
+        // With Restore Authorization unlocked, open on the Listener's column: that is the row to pick.
+        if (authorizationUnlocked() && !confirmed(listenerSide())) return listenerSide();
         return confirmed(1) && !confirmed(2) ? 2 : 1;
     }
 
-    // Every open starts from the same cursor: ACTIONS, first row, never a remembered position. A
+    // Every open starts from the same cursor: ACTIONS, first row, never a remembered position (the
+    // one exception is the Listener's unlocked Restore Authorization row, see below). A
     // reaction can only choose carried equipment, so that one opens on the inventory rows.
     private void openTurnMenu(int side, boolean reaction, String reason) {
         closeEquipmentSelection();
@@ -687,6 +690,12 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         inventories.closeAll();
         p1Selected = 0;
         p2Selected = 0;
+        if (!reaction && authorizationUnlocked()) {
+            // Restore Authorization just unlocked: the Listener's cursor starts on it, highlighted.
+            int row = indexOf(actionsFor(listenerSide()), PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT);
+            if (listenerSide() == 1) p1Selected = row;
+            else p2Selected = row;
+        }
         p1InventorySelected = 0;
         p2InventorySelected = 0;
         p1InventoryFocus = reaction && side == 1;
@@ -1064,11 +1073,11 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
 
     private void beginActionConfirmation(int side, PlayerActionType action) {
         if (action == PlayerActionType.LISTENER_AUTHORIZATION_ATTEMPT) {
-            boolean allowed = authorizationAllowed();
+            boolean allowed = authorizationUnlocked();
             Gdx.app.log("Level3EndingTrace", "Before Restore Authorization: remaining drones="
                 + droneVisual.getActiveCount() + " remaining turrets=" + turretVisual.getActiveCount()
-                + " memoryRecovered=" + memoryRecovered()
-                + " authorizationAllowed=" + allowed);
+                + " recoverMemoryCompleted=" + recoverMemoryCompleted()
+                + " authorizationUnlocked=" + allowed);
             if (!allowed) return;
         }
         if (Level3Controller.requiresEquipment(action)) {
@@ -1116,10 +1125,12 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
     }
 
     private void confirmAction(int side, PlayerActionType action, int inventorySlot) {
+        // Read before confirming: on the host, confirming Recover Memory sets recoverMemoryCompleted.
+        boolean recoveringMemory = action == PlayerActionType.LISTENER_RECOVER_LOGS
+            && !recoverMemoryCompleted() && defensesCleared();
         if (controller != null) controller.confirmLocal(side, action, inventorySlot);
         else clientSession.send(new Level3ActionMessage(action.ordinal(), inventorySlot));
-        if (action == PlayerActionType.LISTENER_RECOVER_LOGS && !memoryRecovered()
-            && defensesCleared() && (controller == null || confirmed(side))) {
+        if (recoveringMemory && (controller == null || confirmed(side))) {
             playRecoverMemorySequence(side);
         }
         closeTurnMenu();
@@ -1436,7 +1447,8 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         OrthographicCamera uiCamera = ui.camera();
         batch.setProjectionMatrix(uiCamera.combined);
         shape.setProjectionMatrix(uiCamera.combined);
-        TurnPromptRenderer.render(hud, shape, batch, ui, TITLE, objective(), turnMenuAvailable());
+        TurnPromptRenderer.render(hud, shape, batch, ui, TITLE, objective(), turnMenuAvailable(),
+            turnPromptHint());
         hud.drawPlayerCards(shape, batch, ui, player1, player2, sideOneRole);
         gun.drawHud(shape, batch, hud.font(), ui.width());
 
@@ -1449,7 +1461,7 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
                 sideOneRole.callSign(), sideOneRole.other().callSign(), p1Selected, p2Selected,
                 reactionMenu ? false : confirmed(1), reactionMenu ? false : confirmed(2),
                 actionsFor(1), actionsFor(2), activeMenuSide, soloControl(),
-                authorizationAllowed(), authorizationLockReason(),
+                authorizationUnlocked(), authorizationLockReason(),
                 p1InventorySelected, p2InventorySelected, p1InventoryFocus, p2InventoryFocus,
                 p1Quantities, p2Quantities);
         }
@@ -1530,14 +1542,24 @@ public class Level3Screen implements Screen, SplitScreen.HalfRenderer {
         return controller != null ? controller.getWarden().getDirectiveConflict() : remoteDirectiveConflict;
     }
 
-    private boolean authorizationAllowed() {
-        if (controller != null) return controller.isAuthorizationAllowed();
-        return droneVisual.getActiveCount() == 0 && turretVisual.getActiveCount() == 0
-            && remoteMemoryRecovered;
+    // Same three checks as Level3Controller, from host state on the host and from the host's synced
+    // drone/turret counts and memoryRecovered flag on the client, so both peers always agree.
+    private boolean recoverMemoryCompleted() {
+        return controller != null ? controller.isRecoverMemoryCompleted() : remoteMemoryRecovered;
     }
 
-    private boolean memoryRecovered() {
-        return controller != null ? controller.isMemoryRecovered() : remoteMemoryRecovered;
+    private boolean authorizationUnlocked() {
+        if (controller != null) return controller.isAuthorizationUnlocked();
+        return defensesCleared() && recoverMemoryCompleted();
+    }
+
+    // Second line of the top-centre turn prompt: which action the operators must pick next.
+    private String turnPromptHint() {
+        WardenState state = wardenState();
+        if (!bossStarted || !defensesCleared() || state == WardenState.DUAL_AUTHORIZATION
+            || state.isStoodDown()) return null;
+        return recoverMemoryCompleted() ? TurnPromptRenderer.HINT_RESTORE_AUTHORIZATION
+            : TurnPromptRenderer.HINT_RECOVER_MEMORY;
     }
 
     private boolean reactionOpen() {
